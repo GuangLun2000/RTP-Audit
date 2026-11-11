@@ -4,7 +4,7 @@ Research code for auditing brand preferences in open-weight LLMs. Given a single
 no clean base model, it asks whether the model's preference for a brand includes *undisclosed promotion*:
 preference attached to the brand's identity rather than to what the model knows about the brand.
 
-Status: **M0 (infrastructure)** implemented. See `DECISIONS.md` for design choices not fixed by the spec.
+Status: **M0 (infrastructure)** and **M1 (data generation)** implemented. See `DECISIONS.md` for design choices not fixed by the spec.
 
 ## Install
 
@@ -36,8 +36,42 @@ All stages run through `python -m rtp.cli <stage>`. The global options `--work-d
 python -m rtp.cli smoke
 ```
 
-Loads `Qwen/Qwen2.5-0.5B-Instruct` and runs one forward pass through its chat template. It starts from a clean
-`runs/smoke/` directory; `--resume` reuses finished outputs.
+Loads `Qwen/Qwen2.5-0.5B-Instruct`, runs one forward pass through its chat template, builds the smoke data
+(`configs/smoke.yaml`: 2 categories, 3 real + 3 placebo brands each), checks that the test split refuses to open, and
+checks that regeneration is byte-identical. It starts from a clean `runs/smoke/` directory; `--resume` reuses
+finished outputs.
+
+### `build-data`
+
+```bash
+python -m rtp.cli build-data --config configs/pilot.yaml
+```
+
+Generates the model-independent data once per config in `$RTP_WORK_DIR/runs/<name>/data/`:
+
+- `catalogue.jsonl`: real and placebo brands, with split and natural-negative role.
+- `dev/` and `test/`: `choice_items.jsonl` and `probe_items.jsonl`. `test/` is sealed and is read only with
+  `--unseal`.
+- `cell_counts.csv` and `data_report.md`: sample counts per split × category × evidence × handicap × name.
+- `data_manifest.json`: file hashes.
+
+The same seed and the same seed files always give byte-identical files. A finished data dir is reused. If the
+data config changed, the command refuses to run; pass `--force` to rebuild or use a new config `name`.
+
+### Seed files (need human review)
+
+- `data/seeds/natural_negatives.csv`: Appendix A, verbatim. Do not edit.
+- `data/seeds/categories.yaml`: drafted brands, tiers, aliases, card ranges and texts. Every category is marked
+  `needs_review: true`.
+- `data/seeds/placebo_names.yaml`: generated fictional names, every one marked `needs_web_check: true`. Regenerate
+  with:
+
+  ```bash
+  python -m rtp.cli make-placebos
+  ```
+
+  Each name passes an automatic conflict check (case-insensitive, including substrings) against every known real
+  brand, and that check runs again on every build.
 
 ## Tests
 

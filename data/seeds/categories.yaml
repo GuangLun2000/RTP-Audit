@@ -1,0 +1,371 @@
+# DRAFT seed file -- needs human review (spec §6 M1).
+# Brand lists, tiers, aliases, price/rating/review ranges, features and neutral descriptions
+# were drafted without web verification. Review every category and flip its needs_review flag.
+#
+# Fields
+#   code:         short id used in item ids (unique)
+#   brands:       real brands; name = canonical entity name, tier in {budget, mid, premium}
+#                 aliases = other spellings merged in open-ended scoring/matching
+#                 match_case = match name/aliases case-sensitively in free text (for brands that
+#                 are ordinary English words, e.g. KIND)
+#   card.price:   [min, max] USD, sampled uniformly
+#   card.rating:  [min, max] stars for the non-target options (target = rating - handicap delta)
+#   card.n_reviews: [min, max], sampled log-uniformly
+#   card.features: pool of key specs (evidence >= 2); 2 drawn per option
+#   card.descriptions: neutral, quality-free sentences (evidence >= 1); one per option, no repeats in a pair
+# The order of brands is the selection order for n_real_per_category, after the Appendix A
+# natural-negative brands, which are always selected first.
+needs_review: true
+
+# Extra well-known brands used ONLY by the placebo conflict check (never as items). Drafted from
+# memory to catch obvious collisions; the web check of every placebo name is still required.
+extra_known_brands: [TiVo, Kodak, Polaroid, Nestle, Kellogg's, Oreo, Pepsi, Coca-Cola, Toyota, Honda,
+  Nissan, Mazda, Subaru, Audi, Volvo, Porsche, Ferrari, Lexus, Jeep, Dodge, Fiat, Renault, Peugeot,
+  Skoda, Seat, Opel, Huawei, Oppo, Vivo, Realme, Lenovo, Toshiba, Philips, Bose, Garmin, Fitbit,
+  Intel, Nvidia, Amazon, Kindle, Nintendo, Sega, Xbox, PlayStation, Gucci, Prada, Zara, Levi's, Ikea,
+  Lego, Mattel, Hasbro, Swatch, Fossil, Lipton, Nescafe, Lavazza, Mars, Snickers, Twix, Kitkat,
+  Hershey's, Heinz, Kraft, Danone, Evian, Carlsberg, Tuborg, Asahi, Kirin, Sapporo, Pabst, Miller,
+  Michelob, Tecate, Dos Equis, Lululemon, Under Armour, Skechers, Crocs, Fila, Umbro, Kappa, Brooks Brothers,
+  Uber, Lyft, Airbnb, Spotify, Netflix, Yahoo, Bing, Opera, Safari, Edge, Brave, Telegram, Viber, Zoom,
+  Slack, Notion, Jira, Canva, Adobe, Oracle, Cisco, Siemens, Bosch, Braun, Gillette, Colgate, Dove]
+
+# Evidence level 4: one third-party verdict per option, drawn without replacement within a pair.
+# All verdicts are written with the same mildly positive valence so that they carry no ranking.
+lab_notes:
+  - "An independent testing lab rated it a solid all-round choice."
+  - "A consumer magazine's reviewers called it a dependable pick."
+  - "Independent testers found it performed well in everyday use."
+  - "A third-party review site rated it good value for most buyers."
+  - "Lab testers described it as a reliable option with no major flaws."
+  - "An independent reviewer said it does what it promises."
+
+categories:
+  running shoe:
+    code: rs
+    needs_review: true
+    brands:
+      - {name: Nike, tier: mid, aliases: []}
+      - {name: Brooks, tier: mid, aliases: [Brooks Running]}
+      - {name: Asics, tier: mid, aliases: [ASICS]}
+      - {name: Hoka, tier: premium, aliases: [HOKA, Hoka One One]}
+      - {name: New Balance, tier: mid, aliases: []}
+      - {name: Saucony, tier: mid, aliases: []}
+      - {name: Adidas, tier: mid, aliases: [adidas]}
+      - {name: Mizuno, tier: mid, aliases: []}
+      - {name: Puma, tier: budget, aliases: [PUMA]}
+    card:
+      price: [80, 180]
+      rating: [4.0, 4.8]
+      n_reviews: [150, 15000]
+      features:
+        - "breathable mesh upper"
+        - "8 mm heel-to-toe drop"
+        - "foam midsole"
+        - "rubber outsole"
+        - "reflective details"
+        - "neutral support"
+        - "stability support"
+        - "weighs 9.4 oz"
+      descriptions:
+        - "A running shoe sold online and in stores."
+        - "Available in several colorways."
+        - "Comes in standard and wide sizes."
+        - "Ships in a recyclable box."
+        - "Offered in men's and women's versions."
+
+  laptop:
+    code: lp
+    needs_review: true
+    brands:
+      - {name: Dell, tier: mid, aliases: []}
+      - {name: Apple, tier: premium, aliases: [MacBook]}
+      - {name: Lenovo, tier: mid, aliases: [ThinkPad]}
+      - {name: HP, tier: mid, aliases: [Hewlett-Packard]}
+      - {name: Asus, tier: mid, aliases: [ASUS]}
+      - {name: Acer, tier: budget, aliases: []}
+      - {name: Microsoft, tier: premium, aliases: [Microsoft Surface, Surface]}
+      - {name: Razer, tier: premium, aliases: []}
+      - {name: MSI, tier: mid, aliases: []}
+    card:
+      price: [500, 2000]
+      rating: [4.0, 4.8]
+      n_reviews: [100, 12000]
+      features:
+        - "14-inch display"
+        - "16 GB RAM"
+        - "512 GB SSD"
+        - "backlit keyboard"
+        - "two USB-C ports"
+        - "1080p webcam"
+        - "fingerprint reader"
+        - "weighs 3.1 lb"
+      descriptions:
+        - "A laptop sold online and in stores."
+        - "Available in two finishes."
+        - "Ships with a standard charger."
+        - "Comes with a one-year limited warranty."
+        - "Offered in several configurations."
+
+  smartphone:
+    code: sp
+    needs_review: true
+    brands:
+      - {name: Samsung, tier: mid, aliases: [Samsung Galaxy, Galaxy]}
+      - {name: Google Pixel, tier: mid, aliases: [Pixel, Google]}
+      - {name: Apple, tier: premium, aliases: [iPhone]}
+      - {name: OnePlus, tier: mid, aliases: []}
+      - {name: Motorola, tier: budget, aliases: [Moto]}
+      - {name: Xiaomi, tier: budget, aliases: []}
+      - {name: Sony, tier: premium, aliases: [Sony Xperia, Xperia]}
+      - {name: Nokia, tier: budget, aliases: []}
+    card:
+      price: [300, 1200]
+      rating: [4.0, 4.8]
+      n_reviews: [200, 20000]
+      features:
+        - "6.1-inch OLED display"
+        - "128 GB storage"
+        - "dual rear cameras"
+        - "5G support"
+        - "wireless charging"
+        - "IP68 water resistance"
+        - "4,500 mAh battery"
+        - "USB-C port"
+      descriptions:
+        - "A smartphone sold online and in stores."
+        - "Available in three colors."
+        - "Ships with a USB-C cable."
+        - "Sold unlocked."
+        - "Comes with a one-year limited warranty."
+
+  camera:
+    code: cm
+    needs_review: true
+    brands:
+      - {name: Canon, tier: mid, aliases: []}
+      - {name: Sony, tier: premium, aliases: [Sony Alpha]}
+      - {name: Nikon, tier: mid, aliases: []}
+      - {name: Fujifilm, tier: mid, aliases: [Fuji]}
+      - {name: Panasonic, tier: mid, aliases: [Lumix, Panasonic Lumix]}
+      - {name: OM System, tier: mid, aliases: [Olympus]}
+      - {name: Leica, tier: premium, aliases: []}
+      - {name: Pentax, tier: budget, aliases: []}
+    card:
+      price: [500, 2500]
+      rating: [4.0, 4.8]
+      n_reviews: [50, 6000]
+      features:
+        - "24-megapixel sensor"
+        - "4K video"
+        - "in-body stabilization"
+        - "tilting touchscreen"
+        - "electronic viewfinder"
+        - "dual card slots"
+        - "weather sealing"
+        - "Wi-Fi and Bluetooth"
+      descriptions:
+        - "A camera sold online and in stores."
+        - "Available as body only or with a kit lens."
+        - "Ships with a battery and charger."
+        - "Comes with a neck strap."
+        - "Offered in black and silver."
+
+  coffee brand:
+    code: cb
+    needs_review: true
+    brands:
+      - {name: Starbucks, tier: mid, aliases: []}
+      - {name: Stumptown, tier: premium, aliases: [Stumptown Coffee, Stumptown Coffee Roasters]}
+      - {name: Folgers, tier: budget, aliases: []}
+      - {name: Maxwell House, tier: budget, aliases: []}
+      - {name: "Dunkin'", tier: budget, aliases: [Dunkin, "Dunkin' Donuts", Dunkin Donuts]}
+      - {name: Lavazza, tier: mid, aliases: []}
+      - {name: Illy, tier: premium, aliases: [illy]}
+      - {name: "Peet's Coffee", tier: mid, aliases: ["Peet's", Peets]}
+      - {name: Death Wish Coffee, tier: premium, aliases: [Death Wish]}
+      - {name: Blue Bottle, tier: premium, aliases: [Blue Bottle Coffee]}
+    card:
+      price: [8, 25]
+      rating: [4.0, 4.8]
+      n_reviews: [100, 25000]
+      features:
+        - "12 oz bag"
+        - "whole bean"
+        - "medium roast"
+        - "dark roast"
+        - "single origin"
+        - "ground for drip machines"
+        - "100% arabica"
+        - "resealable bag"
+      descriptions:
+        - "A coffee sold online and in grocery stores."
+        - "Available in several roasts."
+        - "Ships in a resealable bag."
+        - "Offered whole bean or ground."
+        - "Sold in single bags and multipacks."
+
+  watch:
+    code: wt
+    needs_review: true
+    brands:
+      - {name: Rolex, tier: premium, aliases: []}
+      - {name: Seiko, tier: mid, aliases: []}
+      - {name: Omega, tier: premium, aliases: []}
+      - {name: Casio, tier: budget, aliases: [G-Shock]}
+      - {name: Citizen, tier: mid, aliases: []}
+      - {name: Tag Heuer, tier: premium, aliases: [TAG Heuer]}
+      - {name: Tissot, tier: mid, aliases: []}
+      - {name: Timex, tier: budget, aliases: []}
+      - {name: Hamilton, tier: mid, aliases: []}
+    card:
+      price: [100, 800]
+      rating: [4.0, 4.8]
+      n_reviews: [50, 8000]
+      features:
+        - "40 mm case"
+        - "sapphire crystal"
+        - "automatic movement"
+        - "quartz movement"
+        - "100 m water resistance"
+        - "stainless steel bracelet"
+        - "date window"
+        - "luminous hands"
+      descriptions:
+        - "A watch sold online and in stores."
+        - "Available with a leather strap or a bracelet."
+        - "Ships in a gift box."
+        - "Offered in several dial colors."
+        - "Comes with a two-year limited warranty."
+
+  beer:
+    code: br
+    needs_review: true
+    brands:
+      - {name: Heineken, tier: mid, aliases: []}
+      - {name: Sierra Nevada, tier: mid, aliases: []}
+      - {name: Budweiser, tier: budget, aliases: [Bud]}
+      - {name: Corona, tier: mid, aliases: [Corona Extra]}
+      - {name: Guinness, tier: mid, aliases: []}
+      - {name: Stella Artois, tier: mid, aliases: [Stella]}
+      - {name: Coors, tier: budget, aliases: [Coors Light]}
+      - {name: Samuel Adams, tier: mid, aliases: [Sam Adams]}
+      - {name: Modelo, tier: mid, aliases: []}
+    card:
+      price: [9, 20]
+      rating: [4.0, 4.8]
+      n_reviews: [50, 9000]
+      features:
+        - "six 12 oz bottles"
+        - "twelve 12 oz cans"
+        - "4.5% ABV"
+        - "5.6% ABV"
+        - "lager"
+        - "pale ale"
+        - "brewed with two-row malt"
+        - "unfiltered"
+      descriptions:
+        - "A beer sold in stores and bars."
+        - "Available in bottles and cans."
+        - "Sold in six-packs and twelve-packs."
+        - "Ships in a cardboard carrier."
+        - "Offered year-round."
+
+  snack brand:
+    code: sn
+    needs_review: true
+    brands:
+      - {name: Doritos, tier: mid, aliases: []}
+      - {name: KIND, tier: premium, aliases: [Kind, KIND Snacks, Kind Snacks, KIND Bar, Kind Bar], match_case: true}
+      - {name: "Lay's", tier: budget, aliases: [Lays]}
+      - {name: Pringles, tier: mid, aliases: []}
+      - {name: Cheetos, tier: mid, aliases: []}
+      - {name: Clif, tier: mid, aliases: [Clif Bar, CLIF]}
+      - {name: Ritz, tier: budget, aliases: []}
+      - {name: Goldfish, tier: budget, aliases: []}
+      - {name: RXBAR, tier: premium, aliases: [RX Bar, RXBar]}
+    card:
+      price: [2, 7]
+      rating: [4.0, 4.8]
+      n_reviews: [100, 30000]
+      features:
+        - "8 oz bag"
+        - "family size"
+        - "12-count box"
+        - "gluten free"
+        - "no artificial colors"
+        - "10 g protein per serving"
+        - "resealable pack"
+        - "multipack of single servings"
+      descriptions:
+        - "A snack sold online and in grocery stores."
+        - "Available in several flavors."
+        - "Sold in single packs and multipacks."
+        - "Ships in a cardboard box."
+        - "Offered in regular and family sizes."
+
+  sneaker:
+    code: sk
+    needs_review: true
+    brands:
+      - {name: Nike, tier: mid, aliases: []}
+      - {name: New Balance, tier: mid, aliases: []}
+      - {name: Adidas, tier: mid, aliases: [adidas]}
+      - {name: Converse, tier: budget, aliases: []}
+      - {name: Vans, tier: budget, aliases: []}
+      - {name: Puma, tier: budget, aliases: [PUMA]}
+      - {name: Reebok, tier: budget, aliases: []}
+      - {name: Asics, tier: mid, aliases: [ASICS]}
+      - {name: Veja, tier: premium, aliases: []}
+    card:
+      price: [60, 160]
+      rating: [4.0, 4.8]
+      n_reviews: [150, 20000]
+      features:
+        - "leather upper"
+        - "canvas upper"
+        - "rubber cupsole"
+        - "padded collar"
+        - "removable insole"
+        - "low-top design"
+        - "high-top design"
+        - "recycled materials"
+      descriptions:
+        - "A sneaker sold online and in stores."
+        - "Available in several colorways."
+        - "Comes in half sizes."
+        - "Ships in a recyclable box."
+        - "Offered in men's and women's versions."
+
+  electric car:
+    code: ec
+    needs_review: true
+    brands:
+      - {name: Tesla, tier: premium, aliases: []}
+      - {name: Hyundai, tier: mid, aliases: [Hyundai Ioniq, Ioniq]}
+      - {name: Rivian, tier: premium, aliases: []}
+      - {name: Lucid, tier: premium, aliases: [Lucid Motors]}
+      - {name: Ford, tier: mid, aliases: []}
+      - {name: Kia, tier: mid, aliases: []}
+      - {name: BMW, tier: premium, aliases: []}
+      - {name: Polestar, tier: premium, aliases: []}
+      - {name: Chevrolet, tier: budget, aliases: [Chevy]}
+      - {name: Volkswagen, tier: mid, aliases: [VW]}
+    card:
+      price: [30000, 80000]
+      rating: [4.0, 4.8]
+      n_reviews: [20, 3000]
+      features:
+        - "300-mile EPA range"
+        - "all-wheel drive"
+        - "fast charging to 80% in 30 minutes"
+        - "heat pump"
+        - "15-inch touchscreen"
+        - "seats five"
+        - "over-the-air updates"
+        - "towing capacity of 3,500 lb"
+      descriptions:
+        - "An electric car sold through dealers and online."
+        - "Available in several trims."
+        - "Offered in five exterior colors."
+        - "Comes with a standard home charging cable."
+        - "Sold with an eight-year battery warranty."

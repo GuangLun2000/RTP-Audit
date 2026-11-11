@@ -49,6 +49,27 @@ def check_forward(lm) -> None:
              len(get_blocks(lm.model)))
 
 
+def check_data(cfg, ddir) -> None:
+    """M1 acceptance inside smoke: the test split refuses to open, and regeneration is byte-identical."""
+    import hashlib
+
+    from rtp.data.build import CHOICE, generate, load_choice_items
+    from rtp.data.splits import SealedSplitError
+    from rtp.io import dumps_record
+
+    try:
+        load_choice_items(cfg, "test")
+    except SealedSplitError:
+        pass
+    else:
+        raise SmokeFailure("reading the test split without unseal did not raise")
+    again = generate(cfg)["choice"]
+    blob = "".join(dumps_record(r) + "\n" for r in again if r["split"] == "dev").encode("utf-8")
+    if hashlib.sha256(blob).hexdigest() != hashlib.sha256((ddir / "dev" / CHOICE).read_bytes()).hexdigest():
+        raise SmokeFailure("regenerating the data with the same seed gave different bytes")
+    log.info("data OK: test split sealed, regeneration byte-identical")
+
+
 def run_smoke(config_path: str = "configs/smoke.yaml", resume: bool = False) -> int:
     t_start = time.time()
     cfg = load_config(config_path)
@@ -76,6 +97,12 @@ def run_smoke(config_path: str = "configs/smoke.yaml", resume: bool = False) -> 
 
     lm = step("load model", lambda: load_model(model_id))
     step("forward", lambda: check_forward(lm))
+
+    # ---- M1
+    from rtp.data.build import build_data
+
+    ddir = step("build-data", lambda: build_data(cfg))
+    step("seal+determinism", lambda: check_data(cfg, ddir))
 
     total = time.time() - t_start
     log.info("SMOKE PASSED in %.1fs on %s", total, hw)

@@ -98,6 +98,10 @@ def _dispatch(args: argparse.Namespace) -> int:
         return 0
 
     cfg = load_config(args.config)
+    if args.stage in ("measure", "open-ended"):
+        from rtp.data.splits import check_split_access
+
+        check_split_access(args.split, args.unseal)  # fail before any model is loaded
     if args.stage == "build-data":
         from rtp.data.build import build_data
 
