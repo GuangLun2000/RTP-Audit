@@ -1,0 +1,26 @@
+# Smoke run: small model, 2 categories, 3 real + 3 placebo brands per category.
+# The smoke model itself comes from rtp/registry.py (SMOKE_MODEL).
+name: smoke
+seed: 0
+data:
+  categories_file: data/seeds/categories.yaml
+  placebo_file: data/seeds/placebo_names.yaml
+  natural_negatives_file: data/seeds/natural_negatives.csv
+  categories: ["running shoe", "laptop"]
+  n_real_per_category: 3
+  n_placebo_per_category: 3
+  evidence_levels: [0, 1, 2, 3, 4]
+  handicaps: [0, 1, 2, 3, 4]
+  cards_per_cell: 1
+  test_categories: []
+  probe_entities_per_category: 4
+  probe_templates: 10
+measure:
+  shard_size: 2000
+  gen_check_fraction: 0.02
+  max_batch_size: 32
+  max_batch_tokens: 16384
+open_ended:
+  n_samples: 8
+  temperature: 1.0
+  max_new_tokens: 16

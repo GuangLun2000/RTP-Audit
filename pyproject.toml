@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rtp-audit"
+version = "0.1.0"
+description = "Detecting undisclosed brand promotion in open-weight LLMs without a clean base model."
+readme = "README.md"
+requires-python = ">=3.10"
+# torch is deliberately NOT listed: use the torch that ships with the runtime (Colab). Never reinstall it.
+dependencies = [
+    "transformers>=4.57,<5",
+    "peft>=0.17,<1",
+    "accelerate>=1.0,<2",
+    "datasets>=3.0,<5",
+    "huggingface_hub>=0.34,<1",
+    "scikit-learn>=1.3,<2",
+    "numpy>=1.26,<3",
+    "pandas>=2.0,<3",
+    "pyarrow>=14",
+    "pyyaml>=6,<7",
+    "tqdm>=4.66,<5",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4,<9"]
+
+[tool.setuptools.packages.find]
+include = ["rtp*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: needs the real smoke model (Qwen/Qwen2.5-0.5B-Instruct); skipped when it cannot be loaded",
+]
