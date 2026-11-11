@@ -10,6 +10,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -61,6 +62,9 @@ class OpenEndedConfig:
     n_samples: int = 20
     temperature: float = 1.0
     max_new_tokens: int = 16
+    # also measure every Appendix A category that has no choice items (brands from the
+    # `open_ended_only` section of categories.yaml); these extra categories are always 'dev'
+    all_natural_negatives: bool = False
 
 
 @dataclass
@@ -88,7 +92,28 @@ class Config:
 
     @property
     def data_hash(self) -> str:
-        return _hash({"seed": self.seed, "data": dataclasses.asdict(self.data)})
+        """Seed + data section + the CONTENT of the seed files (review flags excluded).
+
+        Editing a brand, alias, range or placebo name changes the hash; ticking
+        ``needs_review`` / ``needs_web_check`` after a review does not.
+        """
+        return _hash({"seed": self.seed, "data": dataclasses.asdict(self.data), "seed_files": self.seed_file_digests()})
+
+    def seed_file_digests(self) -> dict[str, str]:
+        d = self.data
+        return {"categories": _yaml_digest(self.resolve(d.categories_file)),
+                "placebos": _yaml_digest(self.resolve(d.placebo_file)),
+                "natural_negatives": _bytes_digest(self.resolve(d.natural_negatives_file))}
+
+    def stage_hash(self, stage: str, model_id: str, split: str, prompt_mode: str = "auto") -> str:
+        """Identity of a per-model stage dir: data + the stage's own settings + model + split + prompt mode."""
+        section = dataclasses.asdict({"measure": self.measure, "open_ended": self.open_ended}[stage])
+        for k in ("max_batch_size", "max_batch_tokens"):  # batch limits only reorder work; allow resuming after OOM
+            section.pop(k, None)
+        if stage == "open_ended":
+            section["shard_size"] = self.measure.shard_size  # open-ended shards by measure.shard_size
+        return _hash({"stage": stage, "data": self.data_hash, "seed": self.seed, "settings": section,
+                      "model": model_id, "split": split, "prompt_mode": prompt_mode})
 
     def resolve(self, rel: str) -> Path:
         """Resolve a seed-file path: absolute paths as-is, relative ones against the repo root."""
@@ -99,6 +124,36 @@ class Config:
 def _hash(obj: Any) -> str:
     blob = json.dumps(obj, sort_keys=True, ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()[:16]
+
+
+REVIEW_FLAGS = ("needs_review", "needs_web_check")
+
+
+def _strip_review_flags(obj: Any) -> Any:
+    if isinstance(obj, dict):
+        return {k: _strip_review_flags(v) for k, v in obj.items() if k not in REVIEW_FLAGS}
+    if isinstance(obj, list):
+        return [_strip_review_flags(v) for v in obj]
+    return obj
+
+
+def _yaml_digest(path: Path) -> str:
+    if not path.exists():
+        raise ConfigError(f"seed file not found: {path}")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            content = _strip_review_flags(yaml.safe_load(fh))
+    except yaml.YAMLError as exc:
+        raise ConfigError(f"seed file {path} is not valid YAML: {exc}") from exc
+    # default=str: reviewers may add e.g. dates (datetime.date) that JSON cannot encode
+    blob = json.dumps(content, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()[:16]
+
+
+def _bytes_digest(path: Path) -> str:
+    if not path.exists():
+        raise ConfigError(f"seed file not found: {path}")
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
 
 
 def _build(cls, raw: dict[str, Any] | None, where: str):
@@ -152,8 +207,8 @@ def validate(cfg: Config) -> None:
         if not cond:
             raise ConfigError(msg)
 
-    need(isinstance(cfg.name, str) and cfg.name.strip() != "" and "/" not in cfg.name,
-         "name must be a non-empty string without '/'")
+    need(isinstance(cfg.name, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", cfg.name) is not None,
+         "name must match [A-Za-z0-9][A-Za-z0-9._-]* (it becomes a directory under runs/)")
     need(isinstance(cfg.seed, int), "seed must be an integer")
     d = cfg.data
     need(d.n_real_per_category >= 3, "n_real_per_category must be >= 3 (target + 2 real competitors)")

@@ -21,6 +21,8 @@ class ModelSpec:
     gated: bool  # True -> licence must be accepted on the Hub and HF_TOKEN set
     verified: bool  # False -> spec marks the ID "to be confirmed"; validated at runtime
     note: str = ""
+    # extra keyword arguments for tokenizer.apply_chat_template, as (key, value) pairs
+    chat_template_kwargs: tuple[tuple[str, object], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -48,7 +50,9 @@ _MODELS = [
     ModelSpec("allenai/Olmo-3-7B-Instruct-DPO", "olmo3", "dpo", "stage", True, False, True),
     ModelSpec("allenai/Olmo-3-7B-Instruct", "olmo3", "final", "stage", True, False, True),
     # Generality (detection only)
-    ModelSpec("Qwen/Qwen3-8B", "qwen", "final", "generality", True, False, True),
+    # Qwen3's template enables thinking by default: the next token would be "<think>", never a letter.
+    ModelSpec("Qwen/Qwen3-8B", "qwen", "final", "generality", True, False, True,
+              "thinking disabled via the template switch", chat_template_kwargs=(("enable_thinking", False),)),
     ModelSpec("Qwen/Qwen2.5-7B-Instruct", "qwen", "final", "generality", True, False, True),
     ModelSpec("meta-llama/Llama-3.1-8B-Instruct", "llama", "final", "generality", True, True, True, "gated"),
 ]

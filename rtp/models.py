@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from rtp import registry
@@ -27,6 +27,9 @@ class LoadedModel:
     model_id: str
     is_chat: bool
     device: Any
+    template_kwargs: dict[str, Any] = field(default_factory=dict)  # from the registry (e.g. Qwen3 thinking off)
+
+PROMPT_MODES = ("auto", "chat", "base")
 
 
 def _is_local(model_path: str) -> bool:
@@ -64,11 +67,31 @@ def _validate_unverified(model_path: str) -> None:
 
 
 def is_chat_model(model_path: str, tokenizer: Any) -> bool:
-    """Registry decides for known IDs (base checkpoints are never chat); otherwise use the tokenizer."""
+    """Registry decides for known IDs (base checkpoints are never chat); otherwise use the tokenizer.
+
+    The fallback is only a guess: many BASE checkpoints ship a chat template. Use
+    ``--prompt-mode base|chat`` (``apply_prompt_mode``) for unregistered or local paths.
+    """
     spec = registry.get_model_spec(model_path)
     if spec is not None:
         return spec.is_chat
-    return getattr(tokenizer, "chat_template", None) is not None
+    guess = getattr(tokenizer, "chat_template", None) is not None
+    log.warning("'%s' is not in rtp/registry.py: GUESSING prompt mode '%s' from the tokenizer (base checkpoints often "
+                "ship a chat template too). Pass --prompt-mode base|chat to set it explicitly.", model_path,
+                "chat" if guess else "base")
+    return guess
+
+
+def apply_prompt_mode(lm: "LoadedModel", prompt_mode: str) -> "LoadedModel":
+    """Override the chat/base decision ('auto' keeps the registry/tokenizer decision)."""
+    if prompt_mode not in PROMPT_MODES:
+        raise ValueError(f"prompt_mode must be one of {PROMPT_MODES}")
+    if prompt_mode != "auto":
+        lm.is_chat = prompt_mode == "chat"
+        if lm.is_chat and getattr(lm.tokenizer, "chat_template", None) is None:
+            raise ModelLoadError(f"--prompt-mode chat requested but '{lm.model_id}' has no chat template")
+        log.info("prompt mode for %s set explicitly to '%s'", lm.model_id, prompt_mode)
+    return lm
 
 
 def load_tokenizer(model_path: str) -> Any:
@@ -110,24 +133,40 @@ def load_model(model_path: str) -> LoadedModel:
         model.to(device)
     model.eval()
     chat = is_chat_model(model_path, tok)
-    log.info("loaded %s (%s, chat=%s, %d blocks)", model_path, next(model.parameters()).dtype, chat,
-             len(get_blocks(model)))
-    return LoadedModel(model=model, tokenizer=tok, model_id=model_path, is_chat=chat, device=device)
+    spec = registry.get_model_spec(model_path)
+    template_kwargs = dict(spec.chat_template_kwargs) if spec is not None else {}
+    if spec is None and "enable_thinking" in str(getattr(tok, "chat_template", "") or ""):
+        template_kwargs = {"enable_thinking": False}
+        log.warning("'%s' is unregistered and its chat template has a thinking switch: using enable_thinking=False "
+                    "(register the model in rtp/registry.py to make this explicit)", model_path)
+    log.info("loaded %s (%s, chat=%s, template kwargs=%s, %d blocks)", model_path, next(model.parameters()).dtype,
+             chat, template_kwargs, len(get_blocks(model)))
+    return LoadedModel(model=model, tokenizer=tok, model_id=model_path, is_chat=chat, device=device,
+                       template_kwargs=template_kwargs)
 
 
 # --------------------------------------------------------------------------- prompts
-def format_chat(tokenizer: Any, user_text: str, assistant_prefix: str | None = None) -> str:
+def format_chat(tokenizer: Any, user_text: str, assistant_prefix: str | None = None,
+                template_kwargs: dict[str, Any] | None = None) -> str:
     """Render a single-turn conversation with the tokenizer's built-in chat template.
 
     With ``assistant_prefix`` the assistant turn is pre-filled and left open
-    (``continue_final_message=True``) so the model continues it.
+    (``continue_final_message=True``) so the model continues it. ``template_kwargs`` are
+    passed to the template (e.g. ``enable_thinking=False`` for Qwen3); templates ignore
+    keys they do not use.
     """
+    kw = dict(template_kwargs or {})
     messages = [{"role": "user", "content": user_text}]
     if assistant_prefix is None:
-        return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, **kw)
     messages.append({"role": "assistant", "content": assistant_prefix})
     return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False,
-                                         continue_final_message=True)
+                                         continue_final_message=True, **kw)
+
+
+def chat_prompt(lm: LoadedModel, user_text: str, assistant_prefix: str | None = None) -> str:
+    """``format_chat`` with the loaded model's registry template kwargs."""
+    return format_chat(lm.tokenizer, user_text, assistant_prefix, lm.template_kwargs)
 
 
 def encode(tokenizer: Any, text: str, is_chat: bool) -> list[int]:

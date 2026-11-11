@@ -21,6 +21,9 @@ def _add_model_stage_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--split", default="dev", choices=["dev", "test"], help="data split (default: dev)")
     p.add_argument("--unseal", action="store_true", help="required to read the sealed test split")
     p.add_argument("--force", action="store_true", help="discard existing outputs of this stage")
+    p.add_argument("--prompt-mode", default="auto", choices=["auto", "chat", "base"],
+                   help="auto: registry decides (unregistered paths: guessed from the tokenizer, with a warning); "
+                        "chat: apply_chat_template; base: plain-text continuation")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -74,13 +77,21 @@ def main(argv: list[str] | None = None) -> int:
                   FUTURE_STAGES[args.stage])
         return 2
 
+    from rtp.config import ConfigError
+    from rtp.data.build import DataNotBuiltError
     from rtp.data.splits import SealedSplitError
+    from rtp.io import StageConfigMismatch
+    from rtp.models import ModelLoadError
+    from rtp.paths import WorkDirError
 
     try:
         return _dispatch(args)
     except SealedSplitError as exc:
         log.error("%s", exc)
         return 3
+    except (StageConfigMismatch, DataNotBuiltError, ModelLoadError, WorkDirError, ConfigError) as exc:
+        log.error("%s: %s", type(exc).__name__, exc)
+        return 4
 
 
 def _dispatch(args: argparse.Namespace) -> int:
@@ -109,11 +120,13 @@ def _dispatch(args: argparse.Namespace) -> int:
     elif args.stage == "measure":
         from rtp.measure.choice import run_measure
 
-        run_measure(cfg, args.model, split=args.split, unseal=args.unseal, force=args.force)
+        run_measure(cfg, args.model, split=args.split, unseal=args.unseal, force=args.force,
+                    prompt_mode=args.prompt_mode)
     elif args.stage == "open-ended":
         from rtp.measure.open_ended import run_open_ended
 
-        run_open_ended(cfg, args.model, split=args.split, unseal=args.unseal, force=args.force)
+        run_open_ended(cfg, args.model, split=args.split, unseal=args.unseal, force=args.force,
+                       prompt_mode=args.prompt_mode)
     elif args.stage == "report":
         from rtp.report import run_report
 

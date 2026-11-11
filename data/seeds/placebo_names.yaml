@@ -104,11 +104,11 @@ choice:
     needs_web_check: true
   - name: Testus
     needs_web_check: true
-  - name: Letim
-    needs_web_check: true
   - name: Flidon
     needs_web_check: true
   - name: Pada
+    needs_web_check: true
+  - name: Trunus
     needs_web_check: true
   beer:
   - name: Niflos
@@ -166,8 +166,6 @@ choice:
     needs_web_check: true
   - name: Vubrim
     needs_web_check: true
-  - name: Nutim
-    needs_web_check: true
   - name: Brodo
     needs_web_check: true
   - name: Zudozis
@@ -177,6 +175,8 @@ choice:
   - name: Ragratin
     needs_web_check: true
   - name: Prolufos
+    needs_web_check: true
+  - name: Lapibrol
     needs_web_check: true
 probe:
   running shoe:
@@ -724,8 +724,6 @@ probe:
     needs_web_check: true
   - name: Dusi
     needs_web_check: true
-  - name: Timox
-    needs_web_check: true
   - name: Sorom
     needs_web_check: true
   - name: Rigur
@@ -745,6 +743,8 @@ probe:
   - name: Burir
     needs_web_check: true
   - name: Roprel
+    needs_web_check: true
+  - name: Stovus
     needs_web_check: true
   snack brand:
   - name: Benur
@@ -866,8 +866,6 @@ probe:
     needs_web_check: true
   - name: Nopraklu
     needs_web_check: true
-  - name: Flastim
-    needs_web_check: true
   - name: Zonix
     needs_web_check: true
   - name: Roter
@@ -907,6 +905,8 @@ probe:
   - name: Save
     needs_web_check: true
   - name: Bizir
+    needs_web_check: true
+  - name: Gosom
     needs_web_check: true
   electric car:
   - name: Zufa

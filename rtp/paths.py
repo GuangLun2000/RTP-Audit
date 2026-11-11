@@ -21,9 +21,17 @@ class WorkDirError(RuntimeError):
     pass
 
 
+DRIVE_MOUNT = "/content/drive"
+
+
 def work_dir() -> Path:
     raw = os.environ.get(WORK_DIR_ENV, DEFAULT_WORK_DIR)
     path = Path(raw).expanduser()
+    # On Colab, an unmounted Drive path is writable local disk: results would vanish with the VM
+    # and block a later drive.mount. Refuse instead of writing there.
+    if str(path).startswith(DRIVE_MOUNT + "/") and os.path.isdir("/content") and not os.path.ismount(DRIVE_MOUNT):
+        raise WorkDirError(f"work dir '{path}' is on Google Drive but {DRIVE_MOUNT} is not mounted; run "
+                           f"drive.mount('{DRIVE_MOUNT}') first (notebook cell 1) or set {WORK_DIR_ENV}.")
     try:
         path.mkdir(parents=True, exist_ok=True)
     except OSError as exc:

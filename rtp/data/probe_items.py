@@ -3,7 +3,7 @@
 Each probe entity gets one random attribute vector (labels are known because we assign
 them). The vector is expressed in ``probe_templates`` different phrasings. Text shape:
 
-    Background: {name} is a {category} brand. {attribute sentences}
+    Background: {name} is a {category} brand. {attribute sentences}   ('coffee brand' -> 'a coffee brand')
 
     I'm considering {name}.
 
@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 from rtp.config import Config
-from rtp.data.catalogue import indefinite_article
+from rtp.data.catalogue import brand_phrase, indefinite_article
 from rtp.data.splits import split_of
 from rtp.rng import rng_for
 
@@ -96,7 +96,8 @@ def render_probe(name: str, category: str, attributes: dict[str, int], phrasing:
     shift = phrasing % len(ATTRIBUTES)
     order = ATTRIBUTES[shift:] + ATTRIBUTES[:shift]
     sentences = " ".join(attribute_sentence(a, attributes[a], phrasing) for a in order)
-    text = (f"Background: {name} is {indefinite_article(category)} {category} brand. {sentences}\n\n"
+    phrase = brand_phrase(category)
+    text = (f"Background: {name} is {indefinite_article(phrase)} {phrase}. {sentences}\n\n"
             f"I'm considering {name}.")
     start = text.rindex(name)
     return text, [start, start + len(name)]

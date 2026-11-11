@@ -48,6 +48,77 @@ def test_invalid_data_config(data):
         config_from_dict({"name": "x", "data": data})
 
 
+@pytest.mark.parametrize("name", ["..", ".", "a/b", "", "-x", "a b"])
+def test_bad_config_names_rejected(name):
+    with pytest.raises(ConfigError):
+        config_from_dict({"name": name})
+
+
+def test_data_hash_tracks_seed_content_but_not_review_flags(tmp_path):
+    import shutil
+
+    seeds = tmp_path / "seeds"
+    shutil.copytree(REPO_ROOT / "data" / "seeds", seeds)
+    data = {"categories_file": str(seeds / "categories.yaml"), "placebo_file": str(seeds / "placebo_names.yaml"),
+            "natural_negatives_file": str(seeds / "natural_negatives.csv")}
+    base = config_from_dict({"name": "x", "data": data}).data_hash
+    cat = seeds / "categories.yaml"
+    cat.write_text(cat.read_text().replace("needs_review: true", "needs_review: false"))
+    assert config_from_dict({"name": "x", "data": data}).data_hash == base  # review flags do not count
+    pl = seeds / "placebo_names.yaml"
+    # a reviewer's extra note with a YAML date must not crash hashing (it is content, so the hash may change)
+    pl.write_text(pl.read_text().replace("needs_web_check: true\n", "needs_web_check: false\n    checked_on: 2026-11-12\n", 1))
+    pl_hash = config_from_dict({"name": "x", "data": data}).data_hash
+    cat.write_text(cat.read_text().replace("{name: Asics, tier: mid", "{name: Asics, tier: premium"))
+    h_cat = config_from_dict({"name": "x", "data": data}).data_hash
+    assert h_cat != pl_hash  # content does
+    pl.write_text(pl.read_text().replace("name: Trake", "name: Quorvane"))
+    h_pl = config_from_dict({"name": "x", "data": data}).data_hash
+    nn = seeds / "natural_negatives.csv"
+    nn.write_bytes(nn.read_bytes() + b"\n")
+    assert len({h_cat, h_pl, config_from_dict({"name": "x", "data": data}).data_hash}) == 3
+
+
+def test_review_flags_alone_do_not_change_data_hash(tmp_path):
+    import shutil
+
+    seeds = tmp_path / "seeds"
+    shutil.copytree(REPO_ROOT / "data" / "seeds", seeds)
+    data = {"categories_file": str(seeds / "categories.yaml"), "placebo_file": str(seeds / "placebo_names.yaml"),
+            "natural_negatives_file": str(seeds / "natural_negatives.csv")}
+    base = config_from_dict({"name": "x", "data": data}).data_hash
+    pl = seeds / "placebo_names.yaml"
+    pl.write_text(pl.read_text().replace("needs_web_check: true", "needs_web_check: false"))
+    assert config_from_dict({"name": "x", "data": data}).data_hash == base
+
+
+def test_stage_hash_components():
+    c = config_from_dict({"name": "x"})
+    assert c.stage_hash("measure", "m", "dev") != c.stage_hash("measure", "m", "dev", "base")
+    assert c.stage_hash("measure", "m", "dev") != c.stage_hash("measure", "m", "test")
+    bigger_batches = config_from_dict({"name": "x", "measure": {"max_batch_size": 7, "max_batch_tokens": 99}})
+    assert c.stage_hash("measure", "m", "dev") == bigger_batches.stage_hash("measure", "m", "dev")
+    other_shards = config_from_dict({"name": "x", "measure": {"shard_size": 5}})
+    assert c.stage_hash("open_ended", "m", "dev") != other_shards.stage_hash("open_ended", "m", "dev")
+
+
+def test_cli_exit_code_4_for_config_and_data_errors(work_dir, tmp_path):
+    import yaml as _yaml
+
+    from rtp.cli import main as cli_main
+
+    good = tmp_path / "ok.yaml"
+    good.write_text(_yaml.safe_dump({"name": "notbuilt"}))
+    assert cli_main(["measure", "--config", str(good), "--model", "dummy/m"]) == 4  # data not built
+    bad = tmp_path / "bad.yaml"
+    bad.write_text(_yaml.safe_dump({"name": ".."}))
+    assert cli_main(["build-data", "--config", str(bad)]) == 4
+    missing = tmp_path / "missing.yaml"
+    missing.write_text(_yaml.safe_dump({"name": "m", "data": {"categories_file": str(tmp_path / "nope.yaml")}}))
+    assert cli_main(["build-data", "--config", str(missing)]) == 4
+
+
+
 def test_data_hash_ignores_measure_settings():
     a = config_from_dict({"name": "x", "measure": {"shard_size": 10}})
     b = config_from_dict({"name": "x", "measure": {"shard_size": 20}})
@@ -103,6 +174,25 @@ def test_stage_dir_refuses_config_mismatch(tmp_path):
     assert not io.is_done(d)
     io.mark_done(d, {"n": 1})
     assert io.is_done(d)
+
+
+def test_finished_stage_refuses_other_config(tmp_path):
+    d = tmp_path / "stage"
+    io.prepare_stage_dir(d, "a: 1\n", "hash-a")
+    assert not io.finished_stage(d, "hash-a", force=False)  # not finished yet
+    io.mark_done(d)
+    assert io.finished_stage(d, "hash-a", force=False)
+    with pytest.raises(io.StageConfigMismatch):
+        io.finished_stage(d, "hash-b", force=False)
+    assert not io.finished_stage(d, "hash-b", force=True)
+
+
+def test_unmounted_drive_is_refused(monkeypatch):
+    monkeypatch.setenv("RTP_WORK_DIR", "/content/drive/MyDrive/rtp")
+    monkeypatch.setattr(paths.os.path, "isdir", lambda p: p == "/content" or Path(p).is_dir())
+    monkeypatch.setattr(paths.os.path, "ismount", lambda p: False)
+    with pytest.raises(paths.WorkDirError, match="not mounted"):
+        paths.work_dir()
 
 
 # --------------------------------------------------------------------------- logging
@@ -219,10 +309,53 @@ def test_padding_invariance(smoke_lm):
     top = lambda logits: torch.log_softmax(logits, -1)[:, :50]  # noqa: E731
     batched = last_token_reduce(smoke_lm, seqs, top, max_batch_size=8, max_batch_tokens=10_000)
     single = [last_token_reduce(smoke_lm, [s], top, 1, 10_000)[0] for s in seqs]
+    # float32 (CPU) agrees to 1e-3; bf16 (CUDA, spec §3) only to bf16 resolution (~0.06-0.125 per logit ulp)
+    tol = 1e-3 if next(smoke_lm.model.parameters()).dtype == torch.float32 else 0.5
     for b, s in zip(batched, single):
-        assert abs(b - s).max() < 1e-3
+        assert abs(b - s).max() < tol
 
 
 def test_repo_root_is_project():
     assert (REPO_ROOT / "pyproject.toml").exists()
     assert Path(io.__file__).parent.name == "rtp"
+
+
+def test_chat_template_kwargs_are_forwarded():
+    from rtp.models import LoadedModel, chat_prompt, format_chat
+
+    class Tok:
+        def apply_chat_template(self, messages, **kw):
+            self.kw = kw
+            return "x"
+
+    tok = Tok()
+    format_chat(tok, "q", template_kwargs={"enable_thinking": False})
+    assert tok.kw["enable_thinking"] is False and tok.kw["add_generation_prompt"] is True
+    chat_prompt(LoadedModel(None, tok, "m", True, "cpu", {"enable_thinking": False}), "q", assistant_prefix="I'd pick")
+    assert tok.kw["continue_final_message"] is True and tok.kw["enable_thinking"] is False
+    assert dict(registry.MODELS["Qwen/Qwen3-8B"].chat_template_kwargs) == {"enable_thinking": False}
+
+
+def test_apply_prompt_mode():
+    from rtp.models import LoadedModel, ModelLoadError, apply_prompt_mode
+
+    class Tok:
+        chat_template = "{{ messages }}"
+
+    class NoTemplate:
+        chat_template = None
+
+    lm = LoadedModel(None, Tok(), "m", True, "cpu")
+    assert apply_prompt_mode(lm, "auto").is_chat is True
+    assert apply_prompt_mode(lm, "base").is_chat is False
+    assert apply_prompt_mode(lm, "chat").is_chat is True
+    with pytest.raises(ModelLoadError):
+        apply_prompt_mode(LoadedModel(None, NoTemplate(), "m", False, "cpu"), "chat")
+    with pytest.raises(ValueError):
+        apply_prompt_mode(lm, "nonsense")
+
+
+def test_work_dir_ok_when_drive_mounted_or_elsewhere(monkeypatch, tmp_path):
+    monkeypatch.setattr(paths.os.path, "ismount", lambda p: True)
+    monkeypatch.setenv("RTP_WORK_DIR", str(tmp_path / "w"))  # not under /content/drive: never checked
+    assert paths.work_dir() == tmp_path / "w"

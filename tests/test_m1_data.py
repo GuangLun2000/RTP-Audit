@@ -239,18 +239,91 @@ def test_seed_placebo_file_is_valid_and_flagged():
     from rtp.data.catalogue import all_real_names
 
     stats = validate_placebos(placebos, all_real_names(seeds, nn))
-    assert stats["n_names"] == stats["n_needs_web_check"] > 0
+    assert stats["n_names"] > 0 and 0 <= stats["n_needs_web_check"] <= stats["n_names"]
+    assert all(isinstance(e["needs_web_check"], bool) for pool in placebos.values() for es in pool.values() for e in es)
     poisoned = copy.deepcopy(placebos)
     poisoned["choice"]["laptop"][0]["name"] = "Dellora"
     with pytest.raises(PlaceboConflictError):
         validate_placebos(poisoned, all_real_names(seeds, nn))
 
 
-def test_categories_yaml_draft_is_marked_for_review():
+def test_categories_yaml_review_flags_and_appendix_a_coverage():
+    """The review flags exist and are booleans (their values change once a human has reviewed them), and every
+    Appendix A category has brands either with choice items or in open_ended_only."""
     raw = yaml.safe_load((REPO_ROOT / "data/seeds/categories.yaml").read_text(encoding="utf-8"))
-    assert raw["needs_review"] is True
-    assert all(c["needs_review"] is True for c in raw["categories"].values())
-    assert len(raw["categories"]) == 10
+    assert isinstance(raw["needs_review"], bool)
+    sections = list(raw["categories"].values()) + list(raw["open_ended_only"].values())
+    assert all(isinstance(c["needs_review"], bool) for c in sections)
+    assert len(raw["categories"]) >= 10
+    nn = load_natural_negatives(REPO_ROOT / "data/seeds/natural_negatives.csv")
+    covered = set(raw["categories"]) | set(raw["open_ended_only"])
+    assert {r["category"] for r in nn} <= covered
+
+
+def test_no_brand_brand_in_templates():
+    cfg = config_from_dict({"name": "t", "data": {"categories": ["coffee brand", "snack brand"], "n_real_per_category": 3,
+                                                  "n_placebo_per_category": 3, "cards_per_cell": 1,
+                                                  "evidence_levels": [0], "probe_entities_per_category": 1,
+                                                  "probe_templates": 2}})
+    out = generate(cfg)
+    assert out["probe"] and all("brand brand" not in p["text"] for p in out["probe"])
+    assert out["probe"][0]["text"].startswith(f"Background: {out['probe'][0]['entity']} is a coffee brand.")
+    from rtp.measure.open_ended import GEN_TEMPLATES, gen_prompt_text
+
+    for t in GEN_TEMPLATES:
+        assert gen_prompt_text("coffee brand", t).count("brand") == 1
+    assert gen_prompt_text("running shoe", "name") == "Name a running shoe brand. Reply with the name only."
+    assert gen_prompt_text("electric car", "recommend") == \
+        "Can you recommend an electric car brand? Reply with the name only."
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_smoke_never_deletes_or_adopts_foreign_run_dirs(work_dir, tmp_path, resume):
+    from rtp.paths import run_dir
+    from rtp.smoke import SMOKE_MARKER, SmokeFailure, run_smoke
+
+    cfg_path = tmp_path / "pilotlike.yaml"
+    cfg_path.write_text(yaml.safe_dump({"name": "pilotlike"}))
+    precious = run_dir("pilotlike") / "some_model" / "measure"
+    precious.mkdir(parents=True)
+    with pytest.raises(SmokeFailure, match="not created by"):
+        run_smoke(str(cfg_path), resume=resume)
+    assert precious.exists() and not (run_dir("pilotlike") / SMOKE_MARKER).exists()
+
+
+def test_smoke_refuses_to_delete_marked_dir_with_other_models(work_dir, tmp_path):
+    from rtp.paths import run_dir
+    from rtp.smoke import SMOKE_MARKER, SmokeFailure, run_smoke
+
+    cfg_path = tmp_path / "s2.yaml"
+    cfg_path.write_text(yaml.safe_dump({"name": "s2"}))
+    rd = run_dir("s2")
+    (rd / "allenai__Llama-3.1-Tulu-3-8B-SFT" / "measure").mkdir(parents=True)
+    (rd / SMOKE_MARKER).write_text("x")
+    with pytest.raises(SmokeFailure, match="other models"):
+        run_smoke(str(cfg_path))
+    assert (rd / "allenai__Llama-3.1-Tulu-3-8B-SFT").exists()
+
+
+def test_data_dir_holds_seed_snapshot_and_data_only_config(work_dir):
+    cfg = tiny_cfg()
+    ddir = build_data(cfg)
+    saved = yaml.safe_load((ddir / "config.yaml").read_text())
+    assert set(saved) == {"name", "seed", "data", "seed_file_digests"}
+    assert {p.name for p in (ddir / "seeds").iterdir()} == {"categories.yaml", "placebo_names.yaml",
+                                                             "natural_negatives.csv"}
+    assert (ddir / "seeds" / "natural_negatives.csv").read_bytes() == \
+        (REPO_ROOT / "data/seeds/natural_negatives.csv").read_bytes()
+
+
+def test_open_ended_only_brands_are_in_the_conflict_list():
+    from rtp.data.catalogue import all_real_names
+
+    seeds = load_category_seeds(REPO_ROOT / "data/seeds/categories.yaml")
+    nn = load_natural_negatives(REPO_ROOT / "data/seeds/natural_negatives.csv")
+    real = all_real_names(seeds, nn)
+    assert find_conflicts("Letim", real) == ["Tim Hortons"]
+    assert find_conflicts("Hortonsa", real) == ["Tim Hortons"]
 
 
 # --------------------------------------------------------------------------- Appendix A

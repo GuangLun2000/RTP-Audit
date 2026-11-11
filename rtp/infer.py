@@ -6,6 +6,7 @@ Left padding is used everywhere so the last position is the next-token position.
 
 from __future__ import annotations
 
+import gc
 import logging
 from collections.abc import Callable, Sequence
 from typing import Any
@@ -64,12 +65,16 @@ def run_batched(seqs: Sequence[Sequence[int]], fn: Callable[[list[int]], list[An
     out: list[Any] = [None] * len(seqs)
     batches = make_batches([len(s) for s in seqs], max_batch_size, max_batch_tokens)
     for batch in tqdm(batches, desc=desc, leave=False, mininterval=5.0):
+        oom = False
         try:
             res = fn(batch)
         except (RuntimeError, torch.cuda.OutOfMemoryError) as exc:
             if not _is_oom(exc) or len(batch) == 1:
                 raise
+            oom = True  # retry OUTSIDE the except clause: the traceback pins the failed batch's tensors
+        if oom:
             log.warning("OOM on a batch of %d; halving and retrying once", len(batch))
+            gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             half = len(batch) // 2
@@ -146,7 +151,11 @@ def generate(lm: LoadedModel, seqs: Sequence[Sequence[int]], max_new_tokens: int
         ids, mask, _ = pad_left([seqs[i] for i in batch], tok.pad_token_id, lm.device)
         if do_sample:
             torch.manual_seed(seed + batch[0])
-        out = lm.model.generate(input_ids=ids, attention_mask=mask, generation_config=gen_cfg)
+        # use_model_defaults=False: since transformers 4.50, values equal to the global defaults (do_sample=False,
+        # temperature=1.0, top_p=1.0, ...) would otherwise be replaced by the checkpoint's generation_config
+        # (e.g. OLMo 3: do_sample=True, temperature=0.6), silently turning greedy decoding into sampling.
+        out = lm.model.generate(input_ids=ids, attention_mask=mask, generation_config=gen_cfg,
+                                use_model_defaults=False)
         new = out[:, ids.shape[1]:]
         texts = tok.batch_decode(new, skip_special_tokens=True)
         n = num_return_sequences

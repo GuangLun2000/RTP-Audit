@@ -120,6 +120,32 @@ def mark_done(stage_dir: Path, info: dict[str, Any] | None = None) -> None:
     write_json(Path(stage_dir) / DONE_FILE, info or {})
 
 
+def stored_stage_hash(stage_dir: Path) -> str | None:
+    meta_path = Path(stage_dir) / STAGE_META
+    return read_json(meta_path).get("stage_hash") if meta_path.exists() else None
+
+
+def check_stage_hash(stage_dir: Path, stage_hash: str) -> None:
+    """Raise if ``stage_dir`` belongs to a different configuration (finished or not)."""
+    stored = stored_stage_hash(stage_dir)
+    if stored is not None and stored != stage_hash:
+        raise StageConfigMismatch(
+            f"{stage_dir} was produced with a different configuration or different seed files (hash {stored} "
+            f"!= {stage_hash}). Use a new config name, or pass --force to discard it."
+        )
+
+
+def finished_stage(stage_dir: Path, stage_hash: str, force: bool) -> bool:
+    """True if the stage is finished under the SAME configuration (so it can be skipped).
+
+    A finished stage from another configuration raises unless ``force`` (it is then redone).
+    """
+    if force or not is_done(stage_dir):
+        return False
+    check_stage_hash(stage_dir, stage_hash)
+    return True
+
+
 def prepare_stage_dir(stage_dir: Path, config_yaml: str, stage_hash: str, force: bool = False,
                       extra_meta: dict[str, Any] | None = None) -> Path:
     """Create/validate a stage dir. Saves a full config copy and the hash that owns the dir."""
@@ -129,12 +155,7 @@ def prepare_stage_dir(stage_dir: Path, config_yaml: str, stage_hash: str, force:
         log.warning("--force: removing %s", stage_dir)
         shutil.rmtree(stage_dir)
     if meta_path.exists():
-        meta = read_json(meta_path)
-        if meta.get("stage_hash") != stage_hash:
-            raise StageConfigMismatch(
-                f"{stage_dir} was produced with a different configuration (hash {meta.get('stage_hash')} "
-                f"!= {stage_hash}). Use a new config name, or pass --force to discard it."
-            )
+        check_stage_hash(stage_dir, stage_hash)
     else:
         stage_dir.mkdir(parents=True, exist_ok=True)
         write_json(meta_path, {"stage_hash": stage_hash, **(extra_meta or {})})

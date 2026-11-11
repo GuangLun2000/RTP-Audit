@@ -118,16 +118,23 @@ def data_report(cfg: Config, out: dict[str, Any], counts: pd.DataFrame) -> str:
     return "\n".join(lines) + "\n"
 
 
+SEED_SNAPSHOT_DIR = "seeds"
+
+
+def data_config_yaml(cfg: Config) -> str:
+    """The parts of the run config that determine the data (no default-filled measure sections)."""
+    import yaml
+
+    return yaml.safe_dump({"name": cfg.name, "seed": cfg.seed, "data": cfg.to_dict()["data"],
+                           "seed_file_digests": cfg.seed_file_digests()}, sort_keys=False, allow_unicode=True)
+
+
 def build_data(cfg: Config, force: bool = False) -> Path:
     ddir = data_dir(cfg.name)
-    if io.is_done(ddir) and not force:
-        meta = io.read_json(ddir / io.STAGE_META)
-        if meta.get("stage_hash") != cfg.data_hash:
-            raise io.StageConfigMismatch(f"{ddir} holds data from a different data config; use --force or a new name")
+    if io.finished_stage(ddir, cfg.data_hash, force):
         log.info("data already built at %s (hash %s); skipping", ddir, cfg.data_hash)
         return ddir
-    data_yaml = Config(name=cfg.name, seed=cfg.seed, data=cfg.data).to_yaml()
-    io.prepare_stage_dir(ddir, data_yaml, cfg.data_hash, force=force)
+    io.prepare_stage_dir(ddir, data_config_yaml(cfg), cfg.data_hash, force=force)
     out = generate(cfg)
     files: dict[str, int] = {}
     files[CATALOGUE] = io.write_jsonl(ddir / CATALOGUE, out["catalogue"])
@@ -135,11 +142,17 @@ def build_data(cfg: Config, force: bool = False) -> Path:
         for name, recs in ((CHOICE, out["choice"]), (PROBE, out["probe"])):
             rel = f"{split}/{name}"
             files[rel] = io.write_jsonl(ddir / rel, [r for r in recs if r["split"] == split])
+    # frozen copy of the seed files the data were built from (open-ended reads these)
+    d = cfg.data
+    for src in (d.categories_file, d.placebo_file, d.natural_negatives_file):
+        path = cfg.resolve(src)
+        io.atomic_write_bytes(ddir / SEED_SNAPSHOT_DIR / path.name, path.read_bytes())
     counts = cell_counts(out["choice"])
     io.atomic_write_text(ddir / "cell_counts.csv", counts.to_csv(index=False))
     report = data_report(cfg, out, counts)
     io.atomic_write_text(ddir / "data_report.md", report)
     manifest = {"config": cfg.name, "seed": cfg.seed, "data_hash": cfg.data_hash,
+                "seed_file_digests": cfg.seed_file_digests(),
                 "test_categories": list(cfg.data.test_categories), "categories": out["categories"],
                 "n_records": files, "sha256": {k: io.file_sha256(ddir / k) for k in sorted(files)},
                 "needs_review": out["needs_review"], "placebo_stats": out["placebo_stats"]}
@@ -155,10 +168,20 @@ def _require_built(cfg: Config) -> Path:
     ddir = data_dir(cfg.name)
     if not io.is_done(ddir):
         raise DataNotBuiltError(f"no finished data at {ddir}; run `python -m rtp.cli build-data --config ...` first")
-    meta = io.read_json(ddir / io.STAGE_META)
-    if meta.get("stage_hash") != cfg.data_hash:
-        raise io.StageConfigMismatch(f"data at {ddir} were built from a different data config")
+    if io.stored_stage_hash(ddir) != cfg.data_hash:
+        raise io.StageConfigMismatch(
+            f"data at {ddir} were built from a different data config or different seed-file content "
+            f"(categories.yaml / placebo_names.yaml / natural_negatives.csv). Rebuild with `build-data --force` "
+            f"(model stages built on the old data will then refuse to resume; rerun them with --force).")
     return ddir
+
+
+def load_seed_snapshot(cfg: Config):
+    """(CategorySeeds, natural negatives) from the frozen copy stored with the built data."""
+    ddir = _require_built(cfg) / SEED_SNAPSHOT_DIR
+    seeds = load_category_seeds(ddir / cfg.resolve(cfg.data.categories_file).name)
+    nn = load_natural_negatives(ddir / cfg.resolve(cfg.data.natural_negatives_file).name)
+    return seeds, nn
 
 
 def load_choice_items(cfg: Config, split: str, unseal: bool = False) -> list[dict[str, Any]]:

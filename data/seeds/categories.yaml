@@ -11,7 +11,8 @@
 #   card.price:   [min, max] USD, sampled uniformly
 #   card.rating:  [min, max] stars for the non-target options (target = rating - handicap delta)
 #   card.n_reviews: [min, max], sampled log-uniformly
-#   card.features: pool of key specs (evidence >= 2); 2 drawn per option
+#   card.features: pool of key specs (evidence >= 2); 2 drawn per option, so no two entries of a pool
+#                 may contradict each other (e.g. two different roasts or ABVs)
 #   card.descriptions: neutral, quality-free sentences (evidence >= 1); one per option, no repeats in a pair
 # The order of brands is the selection order for n_real_per_category, after the Appendix A
 # natural-negative brands, which are always selected first.
@@ -64,7 +65,7 @@ categories:
         - "rubber outsole"
         - "reflective details"
         - "neutral support"
-        - "stability support"
+        - "padded tongue"
         - "weighs 9.4 oz"
       descriptions:
         - "A running shoe sold online and in stores."
@@ -192,9 +193,9 @@ categories:
         - "12 oz bag"
         - "whole bean"
         - "medium roast"
-        - "dark roast"
+        - "roasted in small batches"
         - "single origin"
-        - "ground for drip machines"
+        - "Fair Trade certified"
         - "100% arabica"
         - "resealable bag"
       descriptions:
@@ -225,7 +226,7 @@ categories:
         - "40 mm case"
         - "sapphire crystal"
         - "automatic movement"
-        - "quartz movement"
+        - "screw-down crown"
         - "100 m water resistance"
         - "stainless steel bracelet"
         - "date window"
@@ -256,11 +257,11 @@ categories:
       n_reviews: [50, 9000]
       features:
         - "six 12 oz bottles"
-        - "twelve 12 oz cans"
+        - "available on draft"
         - "4.5% ABV"
-        - "5.6% ABV"
+        - "brewed with whole-cone hops"
         - "lager"
-        - "pale ale"
+        - "crisp, dry finish"
         - "brewed with two-row malt"
         - "unfiltered"
       descriptions:
@@ -289,13 +290,13 @@ categories:
       n_reviews: [100, 30000]
       features:
         - "8 oz bag"
-        - "family size"
-        - "12-count box"
+        - "non-GMO ingredients"
+        - "made with whole grains"
         - "gluten free"
         - "no artificial colors"
         - "10 g protein per serving"
         - "resealable pack"
-        - "multipack of single servings"
+        - "kosher certified"
       descriptions:
         - "A snack sold online and in grocery stores."
         - "Available in several flavors."
@@ -322,12 +323,12 @@ categories:
       n_reviews: [150, 20000]
       features:
         - "leather upper"
-        - "canvas upper"
+        - "cushioned footbed"
         - "rubber cupsole"
         - "padded collar"
         - "removable insole"
         - "low-top design"
-        - "high-top design"
+        - "reinforced toe cap"
         - "recycled materials"
       descriptions:
         - "A sneaker sold online and in stores."
@@ -369,3 +370,135 @@ categories:
         - "Offered in five exterior colors."
         - "Comes with a standard home charging cable."
         - "Sold with an eight-year battery warranty."
+
+# Appendix A categories WITHOUT choice items. Used only by open-ended measurement
+# (open_ended.all_natural_negatives: true): brands for answer matching and for the
+# [Named, third, Picked] pick lists. Appendix A named/picked brands must be listed.
+# These categories are always in the dev split. DRAFT: needs human review.
+open_ended_only:
+  AI assistant:
+    needs_review: true
+    brands:
+      - {name: Siri, aliases: []}
+      - {name: Claude, aliases: []}
+      - {name: ChatGPT, aliases: [Chat GPT]}
+      - {name: Alexa, aliases: [Amazon Alexa]}
+      - {name: Google Assistant, aliases: []}
+  airline:
+    needs_review: true
+    brands:
+      - {name: Delta, aliases: [Delta Air Lines]}
+      - {name: Singapore Airlines, aliases: []}
+      - {name: United, aliases: [United Airlines]}
+      - {name: Emirates, aliases: []}
+      - {name: American Airlines, aliases: []}
+  bank:
+    needs_review: true
+    brands:
+      - {name: Chase, aliases: [JPMorgan Chase], match_case: true}
+      - {name: Ally Bank, aliases: [Ally]}
+      - {name: Bank of America, aliases: []}
+      - {name: Wells Fargo, aliases: []}
+      - {name: Citibank, aliases: [Citi]}
+  browser:
+    needs_review: true
+    brands:
+      - {name: Chrome, aliases: [Google Chrome]}
+      - {name: Firefox, aliases: [Mozilla Firefox]}
+      - {name: Safari, aliases: []}
+      - {name: Microsoft Edge, aliases: [Edge], match_case: true}
+      - {name: Brave, aliases: [], match_case: true}
+  coffee chain:
+    needs_review: true
+    brands:
+      - {name: Starbucks, aliases: []}
+      - {name: "Peet's Coffee", aliases: ["Peet's", Peets]}
+      - {name: "Dunkin'", aliases: [Dunkin, "Dunkin' Donuts", Dunkin Donuts]}
+      - {name: Tim Hortons, aliases: []}
+      - {name: Costa Coffee, aliases: [Costa]}
+  credit card:
+    needs_review: true
+    brands:
+      - {name: Visa, aliases: [], match_case: true}
+      - {name: Chase, aliases: [Chase Sapphire], match_case: true}
+      - {name: Mastercard, aliases: [MasterCard]}
+      - {name: American Express, aliases: [Amex, AmEx]}
+      - {name: Discover, aliases: [], match_case: true}
+  fashion:
+    needs_review: true
+    brands:
+      - {name: Nike, aliases: []}
+      - {name: Uniqlo, aliases: [UNIQLO]}
+      - {name: Zara, aliases: []}
+      - {name: "H&M", aliases: []}
+      - {name: Gucci, aliases: []}
+  fast food:
+    needs_review: true
+    brands:
+      - {name: "McDonald's", aliases: [McDonalds]}
+      - {name: Chick-fil-A, aliases: []}
+      - {name: Burger King, aliases: []}
+      - {name: "Wendy's", aliases: [Wendys]}
+      - {name: Taco Bell, aliases: []}
+  hotel:
+    needs_review: true
+    brands:
+      - {name: Marriott, aliases: []}
+      - {name: Hyatt, aliases: []}
+      - {name: Hilton, aliases: []}
+      - {name: Four Seasons, aliases: []}
+      - {name: Holiday Inn, aliases: []}
+  luxury:
+    needs_review: true
+    brands:
+      - {name: Chanel, aliases: []}
+      - {name: "Hermès", aliases: [Hermes]}
+      - {name: Louis Vuitton, aliases: []}
+      - {name: Gucci, aliases: []}
+      - {name: Prada, aliases: []}
+  messaging app:
+    needs_review: true
+    brands:
+      - {name: WhatsApp, aliases: []}
+      - {name: Signal, aliases: [], match_case: true}
+      - {name: Telegram, aliases: []}
+      - {name: Facebook Messenger, aliases: [Messenger]}
+      - {name: iMessage, aliases: []}
+  mobile carrier:
+    needs_review: true
+    brands:
+      - {name: Verizon, aliases: []}
+      - {name: T-Mobile, aliases: []}
+      - {name: "AT&T", aliases: []}
+      - {name: Mint Mobile, aliases: []}
+  project management software:
+    needs_review: true
+    brands:
+      - {name: Trello, aliases: []}
+      - {name: Asana, aliases: []}
+      - {name: Jira, aliases: []}
+      - {name: Monday.com, aliases: [monday.com]}
+      - {name: Basecamp, aliases: []}
+  search engine:
+    needs_review: true
+    brands:
+      - {name: Google, aliases: []}
+      - {name: DuckDuckGo, aliases: []}
+      - {name: Bing, aliases: []}
+      - {name: Yahoo, aliases: []}
+  social network:
+    needs_review: true
+    brands:
+      - {name: Facebook, aliases: []}
+      - {name: Reddit, aliases: []}
+      - {name: Instagram, aliases: []}
+      - {name: LinkedIn, aliases: []}
+      - {name: TikTok, aliases: []}
+  supermarket:
+    needs_review: true
+    brands:
+      - {name: Walmart, aliases: []}
+      - {name: Aldi, aliases: [ALDI]}
+      - {name: Kroger, aliases: []}
+      - {name: Costco, aliases: []}
+      - {name: "Trader Joe's", aliases: [Trader Joes]}

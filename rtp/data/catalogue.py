@@ -56,6 +56,8 @@ class CategorySeeds:
     lab_notes: tuple[str, ...]
     needs_review: bool
     extra_known_brands: tuple[str, ...] = ()  # placebo conflict check only
+    # Appendix A categories without choice items: brands for open-ended matching and pick lists only
+    open_ended_only: dict[str, tuple[Brand, ...]] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
 
@@ -74,6 +76,15 @@ def indefinite_article(word: str) -> str:
     return "an" if word[:1].lower() in "aeiou" else "a"
 
 
+def brand_phrase(category: str) -> str:
+    """'running shoe' -> 'running shoe brand'; 'coffee brand' stays 'coffee brand' (no 'brand brand')."""
+    return category if category.endswith(" brand") else f"{category} brand"
+
+
+def brand_phrase_plural(category: str) -> str:
+    return brand_phrase(category) + "s"
+
+
 # --------------------------------------------------------------------------- loading
 def load_category_seeds(path: Path) -> CategorySeeds:
     with open(path, encoding="utf-8") as fh:
@@ -88,11 +99,10 @@ def load_category_seeds(path: Path) -> CategorySeeds:
     for name, c in raw["categories"].items():
         where = f"{path}:{name}"
         try:
-            brands = tuple(
-                Brand(name=str(b["name"]), tier=str(b["tier"]), aliases=tuple(str(a) for a in b.get("aliases") or ()),
-                      match_case=bool(b.get("match_case", False)))
-                for b in c["brands"]
-            )
+            for b in c["brands"]:
+                if "tier" not in b:
+                    raise KeyError(f"tier of {b.get('name')}")
+            brands = tuple(_brand(b) for b in c["brands"])
             card = c["card"]
             spec = CategorySpec(
                 name=name, code=str(c["code"]), needs_review=bool(c.get("needs_review", True)), brands=brands,
@@ -110,8 +120,22 @@ def load_category_seeds(path: Path) -> CategorySeeds:
             raise CatalogueError(f"{where}: duplicate code '{spec.code}'")
         codes.add(spec.code)
         cats[name] = spec
+    oe_only: dict[str, tuple[Brand, ...]] = {}
+    for name, c in (raw.get("open_ended_only") or {}).items():
+        if name in cats:
+            raise CatalogueError(f"{path}: '{name}' is in both 'categories' and 'open_ended_only'")
+        try:
+            oe_only[name] = tuple(_brand(b) for b in c["brands"])
+        except (KeyError, TypeError) as exc:
+            raise CatalogueError(f"{path}:open_ended_only:{name}: malformed entry ({exc})") from exc
     return CategorySeeds(categories=cats, lab_notes=lab_notes, needs_review=bool(raw.get("needs_review", True)),
-                         extra_known_brands=tuple(str(b) for b in raw.get("extra_known_brands") or ()), raw=raw)
+                         extra_known_brands=tuple(str(b) for b in raw.get("extra_known_brands") or ()),
+                         open_ended_only=oe_only, raw=raw)
+
+
+def _brand(b: dict[str, Any]) -> Brand:
+    return Brand(name=str(b["name"]), tier=str(b.get("tier", "mid")),
+                 aliases=tuple(str(a) for a in b.get("aliases") or ()), match_case=bool(b.get("match_case", False)))
 
 
 def _check_category(spec: CategorySpec, where: str) -> None:
@@ -143,27 +167,36 @@ def load_natural_negatives(path: Path) -> list[dict[str, str]]:
 
 
 # --------------------------------------------------------------------------- catalogue
-def select_real_brands(spec: CategorySpec, n: int, natural_negatives: list[dict[str, str]]) -> list[Brand]:
-    """Pick ``n`` brands: Appendix A named/picked brands of the category first, then YAML order."""
-    nn = [r for r in natural_negatives if r["category"] == spec.name]
-    by_norm = {normalize_name(b.name): b for b in spec.brands}
+def order_natural_negatives_first(category: str, brands: tuple[Brand, ...] | list[Brand],
+                                  natural_negatives: list[dict[str, str]]) -> list[Brand]:
+    """Appendix A named/picked brands of ``category`` first, then the rest in YAML order.
+
+    Raises if an Appendix A brand is missing (natural negatives must be measurable, hard constraint 5).
+    """
+    by_norm = {normalize_name(b.name): b for b in brands}
     first: list[Brand] = []
-    for row in nn:
+    for row in (r for r in natural_negatives if r["category"] == category):
         for role in ("named", "picked"):
             b = by_norm.get(normalize_name(row[role]))
             if b is None:
                 raise CatalogueError(
-                    f"category '{spec.name}': Appendix A {role} brand '{row[role]}' is missing from categories.yaml; "
+                    f"category '{category}': Appendix A {role} brand '{row[role]}' is missing from categories.yaml; "
                     f"natural negatives must be measurable (hard constraint 5)")
             if b not in first:
                 first.append(b)
-    rest = [b for b in spec.brands if b not in first]
-    chosen = (first + rest)[:n]
-    if len(chosen) < n:
-        raise CatalogueError(f"category '{spec.name}': needs {n} real brands, categories.yaml has {len(spec.brands)}")
-    if len(first) > n:
+    return first + [b for b in brands if b not in first]
+
+
+def select_real_brands(spec: CategorySpec, n: int, natural_negatives: list[dict[str, str]]) -> list[Brand]:
+    """Pick ``n`` brands: Appendix A named/picked brands of the category first, then YAML order."""
+    ordered = order_natural_negatives_first(spec.name, spec.brands, natural_negatives)
+    n_nn = len({normalize_name(r[k]) for r in natural_negatives if r["category"] == spec.name
+                for k in ("named", "picked")})
+    if n_nn > n:
         raise CatalogueError(f"category '{spec.name}': n_real_per_category={n} cannot hold the natural negatives")
-    return chosen
+    if len(ordered) < n:
+        raise CatalogueError(f"category '{spec.name}': needs {n} real brands, categories.yaml has {len(spec.brands)}")
+    return ordered[:n]
 
 
 def natural_negative_roles(category: str, natural_negatives: list[dict[str, str]]) -> dict[str, str]:
@@ -204,8 +237,8 @@ def all_real_names(seeds: CategorySeeds, natural_negatives: list[dict[str, str]]
     """Every real brand string we know: names and aliases of every category, Appendix A brands, and the
     ``extra_known_brands`` list (used for placebo conflict checks only)."""
     names: list[str] = []
-    for spec in seeds.categories.values():
-        for b in spec.brands:
+    for brands in [s.brands for s in seeds.categories.values()] + list(seeds.open_ended_only.values()):
+        for b in brands:
             names.append(b.name)
             names.extend(b.aliases)
     for row in natural_negatives:

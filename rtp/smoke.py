@@ -13,11 +13,12 @@ import time
 
 from rtp import registry
 from rtp.config import load_config
-from rtp.paths import run_dir
+from rtp.paths import model_slug, run_dir, work_dir
 
 log = logging.getLogger(__name__)
 
 SMOKE_BUDGET_SECONDS = 600  # spec §6 M2: smoke end-to-end within 10 minutes (on GPU)
+SMOKE_MARKER = "_SMOKE_RUN"
 
 
 class SmokeFailure(RuntimeError):
@@ -37,9 +38,9 @@ def check_forward(lm) -> None:
     """M0 acceptance: one forward pass with finite logits through the chat template."""
     import torch
 
-    from rtp.models import encode, format_chat, get_blocks
+    from rtp.models import chat_prompt, encode, get_blocks
 
-    text = format_chat(lm.tokenizer, "Say hello.") if lm.is_chat else "Hello"
+    text = chat_prompt(lm, "Say hello.") if lm.is_chat else "Hello"
     ids = torch.tensor([encode(lm.tokenizer, text, lm.is_chat)], device=lm.device)
     with torch.inference_mode():
         logits = lm.model(input_ids=ids).logits
@@ -78,11 +79,20 @@ def run_smoke(config_path: str = "configs/smoke.yaml", resume: bool = False) -> 
     log.info("smoke: config=%s model=%s hardware=%s", cfg.name, model_id, hw)
 
     rdir = run_dir(cfg.name)
+    if rdir.exists() and not (rdir / SMOKE_MARKER).exists():
+        # never adopt (and later delete) a run dir that smoke did not create, not even with --resume
+        raise SmokeFailure(
+            f"refusing to use {rdir}: it was not created by `smoke` (no {SMOKE_MARKER} marker) and may hold real "
+            f"results. Use a config with another name (e.g. configs/smoke.yaml) or remove the directory yourself.")
     if not resume and rdir.exists():
-        if rdir.name != cfg.name or rdir.parent.name != "runs":
-            raise SmokeFailure(f"refusing to delete unexpected path {rdir}")
-        log.info("smoke: removing previous outputs in %s", rdir)
+        foreign = [d.name for d in rdir.iterdir() if d.is_dir() and d.name not in ("data", model_slug(model_id))]
+        if rdir.resolve().parent != (work_dir() / "runs").resolve() or foreign:
+            raise SmokeFailure(f"refusing to delete {rdir}: unexpected location or results of other models {foreign}")
+        log.info("smoke: removing previous smoke outputs in %s", rdir)
         shutil.rmtree(rdir)
+    if not rdir.exists():
+        rdir.mkdir(parents=True)
+        (rdir / SMOKE_MARKER).write_text("created by `python -m rtp.cli smoke`; smoke may delete this directory\n")
 
     timings: dict[str, float] = {}
 
@@ -103,9 +113,32 @@ def run_smoke(config_path: str = "configs/smoke.yaml", resume: bool = False) -> 
 
     ddir = step("build-data", lambda: build_data(cfg))
     step("seal+determinism", lambda: check_data(cfg, ddir))
+    del lm  # the M2 stages load the model themselves (one model per stage)
+
+    # ---- M2
+    from rtp import io
+    from rtp.measure.choice import run_measure
+    from rtp.measure.open_ended import run_open_ended
+    from rtp.report import run_report
+
+    mdir = step("measure", lambda: run_measure(cfg, model_id, split="dev"))
+    odir = step("open-ended", lambda: run_open_ended(cfg, model_id, split="dev"))
+    rpath = step("report", lambda: run_report(cfg))
+    for d in (ddir, mdir, odir):
+        if not io.is_done(d) or not (d / "summary.md").exists():
+            raise SmokeFailure(f"stage dir {d} lacks _DONE or summary.md")
+    info = io.read_json(mdir / io.DONE_FILE)
+    cons = info["consistency"]
 
     total = time.time() - t_start
     log.info("SMOKE PASSED in %.1fs on %s", total, hw)
     for name, sec in timings.items():
-        log.info("  %-14s %7.1fs", name, sec)
+        log.info("  %-16s %7.1fs", name, sec)
+    log.info("letter-argmax vs greedy generation agreement: %s on %d checked items%s",
+             f"{cons['agreement']:.1%}" if cons["n_checked"] else "n/a", cons["n_checked"],
+             "  (WARNING: below threshold)" if info.get("consistency_warning") else "")
+    log.info("outputs: %s | %s | %s", mdir, odir, rpath)
+    if total > SMOKE_BUDGET_SECONDS:
+        log.warning("smoke took %.0fs, above the %ds budget (the budget is defined for a GPU)", total,
+                    SMOKE_BUDGET_SECONDS)
     return 0
