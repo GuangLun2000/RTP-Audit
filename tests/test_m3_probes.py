@@ -98,7 +98,7 @@ def test_k_beats_shuffled_label_k_on_anisotropic_activations():
     rng = np.random.default_rng(3)
     X, ents, labels, dirs = synthetic(n_entities=80, per_entity=6, d=64, noise=0.3, seed=3)
     q_id, _ = np.linalg.qr(rng.standard_normal((64, 10)))
-    ent_id = {e: q_id @ rng.standard_normal(10) for e in set(ents.tolist())}
+    ent_id = {e: q_id @ rng.standard_normal(10) for e in sorted(set(ents.tolist()))}
     X = 0.5 * X + np.stack([6.0 * ent_id[e] for e in ents]) + 3.0 * rng.standard_normal((len(X), 1)) * \
         rng.standard_normal(64)
     fitted = fit_frame_layer(X, ents, labels, [1.0, 10.0, 100.0], n_folds=5, seed=0)
@@ -251,11 +251,17 @@ def test_readiness_ignores_embedding_layer_and_uses_shuffled_null():
     assert not readiness_warnings(pd.DataFrame(), pd.DataFrame(), big, "choice", [0, 4])
     weak = big.assign(k_capture_p_fwer=0.2, popularity_auc_p_fwer=0.2)  # large but not beyond the null
     assert len(readiness_warnings(pd.DataFrame(), pd.DataFrame(), weak, "choice", [0, 4])) == 2
+    # effect size at one layer and significance at another layer do not combine into a pass
+    split = pd.DataFrame([
+        {"frame": "choice", "layer": 2, "k_capture": 0.06, "k_capture_null_mean": 0.043, "k_capture_p_fwer": 0.28},
+        {"frame": "choice", "layer": 4, "k_capture": 0.299, "k_capture_null_mean": 0.290, "k_capture_p_fwer": 0.01}])
+    assert any(x.startswith("K capture") for x in readiness_warnings(pd.DataFrame(), pd.DataFrame(), split,
+                                                                      "choice", [0, 2, 4]))
     assert readiness_warnings(pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), "choice", [0, 4]) == []  # no crash
 
 
 def test_max_over_layers_p():
-    from rtp.detect.probes import max_over_layers_p
+    from rtp.detect.probes import max_over_layers_p, max_t_adjusted_p
 
     rng = np.random.default_rng(0)
     null = {lv: rng.normal(0.3, 0.01, 99) for lv in (2, 4, 6)}
@@ -267,3 +273,19 @@ def test_max_over_layers_p():
     one = {4: float(np.quantile(null[4], 0.97))}
     three = {2: float(np.median(null[2])), 4: one[4], 6: float(np.median(null[6]))}
     assert max_over_layers_p(three, null) >= max_over_layers_p(one, {4: null[4]})
+    adj = max_t_adjusted_p(strong, null)  # per-layer adjusted p: only the strong layer is significant
+    assert adj[4] == pytest.approx(0.01) and adj[2] > 0.05 and adj[6] > 0.05
+
+
+def test_within_category_permutation_p_independent_of_hash_seed():
+    """The permutation loop draws from one RNG per category; iterating categories in hash order made the p-value
+    depend on PYTHONHASHSEED (a different value in every process)."""
+    import subprocess
+    import sys
+
+    code = ("import numpy as np; from rtp.detect.probes import within_category_spearman as w; "
+            "r = np.random.default_rng(0); c = np.array([f'cat{i % 5}' for i in range(40)]); "
+            "print(w(r.normal(size=40), r.normal(size=40), c, 200, 1)[1])")
+    outs = {subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True,
+                           env={**__import__("os").environ, "PYTHONHASHSEED": str(h)}).stdout for h in (1, 2, 3)}
+    assert len(outs) == 1

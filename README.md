@@ -45,11 +45,12 @@ and 3 placebo brands each):
 1. One forward pass through the chat template.
 2. `build-data`.
 3. Checks that the test split refuses to open and that regeneration is byte-identical.
-4. `measure`, `open-ended` and `report`.
+4. `measure`, `open-ended`, `extract`, `probe`, `localize` and `report`.
 
-It prints per-step timings and the letter-argmax vs generation agreement. It starts from a clean `runs/smoke/`
-directory; `--resume` reuses finished outputs. Measured time: about 2.5 min on an Apple M4 CPU; the 10-minute
-budget in the spec is for a GPU.
+It prints per-step timings, the free-answer agreement with the O5 argmax (with its chance level and the
+immediate/deferred split) and the answer coverage. It starts from a clean `runs/smoke/` directory; `--resume`
+reuses finished outputs. Measured time: about 4 min on an Apple M4 CPU; the 10-minute budget in the spec is for
+a GPU.
 
 ### `build-data`
 
@@ -227,10 +228,12 @@ python -m rtp.cli localize --config configs/pilot.yaml --model allenai/Llama-3.1
 Where is the name effect carried? Full activation transplants on evidence-0 pairs (`localize.pairs_per_entity`
 per entity, `localize.rotations`), knock-in (placebo run ← real residual, spec §7.6) and knock-out, at the target
 name's last token, every post-name token, the final token, and a band of `localize.band` layers, at every
-`localize.layer_stride`-th layer. `recovery.parquet` and `summary.md` give the pooled recovery with an entity
+`localize.layer_stride`-th layer (default: `extract.layer_stride`; it must be a multiple of it, so that the chosen
+layer has a K). `recovery.parquet` and `summary.md` give the pooled recovery with an entity
 bootstrap CI, the between-entity R², recovery per token-count class, the spec layer (highest knock-in recovery at
 the name's last token; warning below 0.8) and the pre-registered alternative layer. Cost: about
-2 × (4 × layers) + 2 scored runs per unit; the pilot settings give 1,440 units.
+2 × (4 × layers) + 2 scored runs per unit; the pilot settings give 1,584 units (198 dev entities × 4 pairs ×
+2 rotations).
 
 ### `status`, `doctor`, `feedback` (operations)
 

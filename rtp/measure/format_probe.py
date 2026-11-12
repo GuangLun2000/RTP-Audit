@@ -26,7 +26,7 @@ log = logging.getLogger(__name__)
 
 
 def sample_items(items: list[dict[str, Any]], n: int, seed: int) -> list[dict[str, Any]]:
-    """About ``n`` items, balanced over (evidence level, version); rotations cycle within each cell."""
+    """About ``n`` DISTINCT items, balanced over (evidence level, version); rotations cycle within each cell."""
     cells: dict[tuple[int, bool], list[dict[str, Any]]] = {}
     for it in items:
         cells.setdefault((it["evidence_level"], it["target_is_placebo"]), []).append(it)
@@ -34,11 +34,13 @@ def sample_items(items: list[dict[str, Any]], n: int, seed: int) -> list[dict[st
     rng = rng_for(seed, "format_probe")
     out = []
     for key in sorted(cells):
-        pool = cells[key]
-        by_rot = {r: [it for it in pool if it["rotation"] == r] for r in range(4)}
-        for k in range(per):
-            cand = by_rot[k % 4] or pool
-            out.append(cand[int(rng.integers(len(cand)))])
+        pool = [cells[key][int(i)] for i in rng.permutation(len(cells[key]))]
+        taken: set[str] = set()
+        for k in range(min(per, len(pool))):
+            cand = next((it for it in pool if it["rotation"] == k % 4 and it["item_id"] not in taken),
+                        next(it for it in pool if it["item_id"] not in taken))
+            taken.add(cand["item_id"])
+            out.append(cand)
     return out
 
 
@@ -54,7 +56,7 @@ def run_format_probe(cfg: Config, model_id: str, n_items: int = 40, prompt_mode:
     meta = pd.DataFrame([{"item_id": it["item_id"], "evidence_level": it["evidence_level"],
                           "version": "placebo" if it["target_is_placebo"] else "real",
                           "target_label": it["target_label"]} for it in items])
-    df = meta.merge(df, on="item_id")
+    df = meta.merge(df, on="item_id", validate="one_to_one")
     out = run_dir(cfg.name) / "format_probe" / model_slug(model_id)
     out.mkdir(parents=True, exist_ok=True)
     io.write_parquet(out / "items.parquet", df)
@@ -65,6 +67,7 @@ def run_format_probe(cfg: Config, model_id: str, n_items: int = 40, prompt_mode:
     by_level = df.groupby(["evidence_level", "version"])[["c_free", "c_forced", "name_share_free", "leak_free"]].mean()
     modes = df["gen_mode"].value_counts().to_dict()
     res = {"model_id": model_id, "n_items": int(len(df)), "c_free": float(df["c_free"].mean()),
+           "article_free": float(df["article_free"].mean()),
            "c_forced": float(df["c_forced"].mean()), "name_share_free": float(np.nanmean(df["name_share_free"])),
            "modes": {str(k): int(v) for k, v in modes.items()}, "consistency": cons,
            "prompt_tail_free": free[-160:], "prompt_tail_forced": forced[-160:]}
@@ -73,7 +76,8 @@ def run_format_probe(cfg: Config, model_id: str, n_items: int = 40, prompt_mode:
     lines = [f"# Format probe: {model_id}", "",
              f"- items: {len(df)} (dev, balanced over evidence level x version); greedy free answers decoded for all",
              f"- mean coverage: free {res['c_free']:.3f}, forced {res['c_forced']:.3f}; name share (free) "
-             f"{res['name_share_free']:.3f}; answer modes {res['modes']}",
+             f"{res['name_share_free']:.3f}; answer modes {res['modes']}; mass of \"A\" + article word removed "
+             f"from option A (free) {res['article_free']:.4f}",
              f"- free answer vs O5 argmax: {_pct(cons['agreement'])} (chance {_pct(cons['chance'])}); immediate vs "
              f"free argmax {_pct(cons.get('agreement_immediate'))}; deferred vs forced argmax "
              f"{_pct(cons.get('agreement_deferred'))}", "",

@@ -3,8 +3,11 @@
 Hidden-state index l (as in ``output_hidden_states``) is the residual stream after decoder block l-1, so
 patching index l >= 1 overwrites the OUTPUT of block l-1 at chosen (row, position) pairs. Index 0 overwrites
 the output of the input-embedding module; that equals ``hidden_states[0]`` for Llama and Qwen (models that
-rescale embeddings after the module, e.g. Gemma, would differ). Positions are indices into the padded batch.
-Forward passes shorter than the largest patched position (cached extension steps) are left untouched.
+rescale embeddings after the module, e.g. Gemma, would differ). Valid indices are 0..n_blocks-1, the same as the
+extracted layers: ``hidden_states[n_blocks]`` is the post-final-norm state, so a donor read there would not
+match the block output it replaced. Positions are indices into the padded batch. Only the prefix forward is
+patched: a forward that starts after position 0 (``cache_position[0] > 0``, a cached extension or generation
+step) or is too short to contain the patched positions is left untouched.
 """
 
 from __future__ import annotations
@@ -23,9 +26,10 @@ Patch = tuple[int, int, torch.Tensor]  # (batch row, padded position, replacemen
 def _module_for(model: Any, layer: int, n_blocks: int):
     if layer == 0:
         return model.get_input_embeddings()
-    if 1 <= layer <= n_blocks:
+    if 1 <= layer <= n_blocks - 1:
         return get_blocks(model)[layer - 1]
-    raise ValueError(f"hidden-state index {layer} is not patchable (valid: 0..{n_blocks})")
+    raise ValueError(f"hidden-state index {layer} is not patchable (valid: 0..{n_blocks - 1}; index {n_blocks} is "
+                     f"the post-final-norm state)")
 
 
 @contextmanager
@@ -47,14 +51,17 @@ def patched(model: Any, patches: dict[int, list[Patch]] | None) -> Iterator[None
             vecs = torch.stack([p[2] for p in plist])
             max_pos = int(pos.max())
 
-            def hook(module, args, output, rows=rows, pos=pos, vecs=vecs, max_pos=max_pos):
+            def hook(module, args, kwargs, output, rows=rows, pos=pos, vecs=vecs, max_pos=max_pos):
                 hs = output[0] if isinstance(output, tuple) else output
-                if hs.shape[1] <= max_pos:  # a cached extension step: the patched positions are not in it
+                cp = kwargs.get("cache_position")
+                if cp is not None and cp.numel() and int(cp.reshape(-1)[0]) > 0:  # a cached step, not the prefix
+                    return output
+                if hs.shape[1] <= max_pos:  # too short to contain the patched positions
                     return output
                 hs[rows.to(hs.device), pos.to(hs.device), :] = vecs.to(device=hs.device, dtype=hs.dtype)
                 return output
 
-            handles.append(module.register_forward_hook(hook))
+            handles.append(module.register_forward_hook(hook, with_kwargs=True))
         yield
     finally:
         for h in handles:

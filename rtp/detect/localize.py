@@ -18,8 +18,8 @@ at the free and forced positions; patches apply to the prompt, the readout conti
 
 Aggregates per (direction, site, layer): pooled recovery = sum(ne * delta) / sum(ne^2) over units (a
 least-squares slope, sign-invariant, weighted by |name effect|) with a bootstrap CI over entities; the
-between-entity R^2 of entity-mean deltas against entity-mean name effects (what M4's ranking needs); and
-pooled recovery per token-count class of the real name (1, 2, 3+ tokens).
+between-entity fit of entity-mean deltas to entity-mean name effects (identity-line R^2, offset-invariant R^2
+and correlation; entities are (category, brand)); and pooled recovery per token-count class of the real name.
 
 Layer choice (reported, not used here): the spec rule is the scanned layer with the highest pooled knock-in
 recovery at ``name_last`` (warning below 0.8). A pre-registered alternative (DECISIONS.md) is the deepest
@@ -54,8 +54,9 @@ VERSIONS = ("real", "placebo")
 
 # --------------------------------------------------------------------------- units
 def select_units(items: list[dict[str, Any]], cfg: Config) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-    """(real item, placebo item) per selected (pair, rotation): evidence 0, ``pairs_per_entity`` pairs per entity
-    spread over the placebo substitutes (one pair per substitute in turn), at ``localize.rotations``."""
+    """(real item, placebo item) per selected (pair, rotation): evidence 0, ``pairs_per_entity`` pairs per entity,
+    one per placebo substitute in a per-entity random order (so with fewer pairs than substitutes every
+    substitute is still used about equally often across entities), at ``localize.rotations``."""
     lz = cfg.localize
     by_pair: dict[str, dict[tuple[bool, int], dict[str, Any]]] = {}
     for it in items:
@@ -68,7 +69,7 @@ def select_units(items: list[dict[str, Any]], cfg: Config) -> list[tuple[dict[st
     units = []
     for (cat, ent), subs in sorted(by_entity.items()):
         rng = rng_for(cfg.seed, "localize", cat, ent)
-        order = sorted(subs)
+        order = [sorted(subs)[int(i)] for i in rng.permutation(len(subs))]  # not always the first substitutes
         pools = {s: sorted(subs[s]) for s in order}
         chosen: list[str] = []
         while len(chosen) < lz.pairs_per_entity and any(pools.values()):
@@ -179,7 +180,8 @@ def score_rows(lm, units: list[dict[str, Any]], rows: list[dict[str, Any]], lett
     for r, x in zip(rows, res):
         it = units[r["unit"]][r["receiver"]]["item"]
         e = estimators(x["free"], x["forced"], LETTERS.index(it["target_label"]))
-        out.append({k: e[k] for k in ("s_target", "s_target_free", "s_target_forced", "c_free", "c_forced")})
+        out.append({k: e[k] for k in ("s_target", "s_target_free", "s_target_forced", "c_free", "c_forced",
+                                      "name_share_free", "leak_free", "leak_forced", "pruned_free")})
     return out
 
 
@@ -217,10 +219,28 @@ def _pooled(ne: np.ndarray, delta: np.ndarray) -> float:
     return float((ne * delta).sum() / den) if den > 0 else float("nan")
 
 
+def between_entity_fit(ne: np.ndarray, delta: np.ndarray) -> dict[str, float]:
+    """How well entity-mean transplant effects reproduce entity-mean name effects (needs >= 3 entities).
+
+    r2_between_entities: 1 - sum (ne - delta)^2 / sum (ne - mean ne)^2 (identity line: penalises uniform
+    under-recovery and constant offsets too); r2_centered: 1 - Var(ne - delta) / Var(ne) (offset-invariant,
+    the share of between-entity variance left over after the transplant is removed: what a within-model z of
+    ne - delta depends on); corr_between: Pearson correlation of ne and delta across entities (ranking).
+    """
+    nan = float("nan")
+    if len(ne) < 3 or float(np.var(ne)) == 0:
+        return {"r2_between_entities": nan, "r2_centered": nan, "corr_between": nan}
+    ss = float(((ne - ne.mean()) ** 2).sum())
+    corr = float(np.corrcoef(ne, delta)[0, 1]) if float(np.var(delta)) > 0 else nan
+    return {"r2_between_entities": 1 - float(((ne - delta) ** 2).sum()) / ss,
+            "r2_centered": 1 - float(np.var(ne - delta)) / float(np.var(ne)), "corr_between": corr}
+
+
 def recovery_table(df: pd.DataFrame, n_boot: int, seed: int) -> pd.DataFrame:
     """Pooled recovery per (direction, site, layer) with an entity bootstrap CI, between-entity R^2 and per
     token class. The bootstrap resamples entities with replacement (the same draws for every row)."""
     t = unit_deltas(df)
+    t["entity"] = t["category"].astype(str) + "/" + t["entity"].astype(str)  # one brand name, several categories
     ents = sorted(t["entity"].unique())
     rng = np.random.default_rng(seed)
     counts = rng.multinomial(len(ents), np.full(len(ents), 1 / len(ents)), size=n_boot) if ents else None
@@ -233,13 +253,12 @@ def recovery_table(df: pd.DataFrame, n_boot: int, seed: int) -> pd.DataFrame:
             boots = (counts @ per["nd"].to_numpy()) / den
         boots = boots[np.isfinite(boots) & (den > 0)]
         em = g.groupby("entity")[["ne", "delta"]].mean()
-        ss = float(((em["ne"] - em["ne"].mean()) ** 2).sum())
-        r2 = 1 - float(((em["ne"] - em["delta"]) ** 2).sum()) / ss if ss > 0 and len(em) >= 3 else float("nan")
+        between = between_entity_fit(em["ne"].to_numpy(), em["delta"].to_numpy())
         row = {"direction": direction, "site": site, "layer": int(layer), "layers": str(g["layers"].iloc[0]),
                "pooled_recovery": _pooled(g["ne"].to_numpy(), g["delta"].to_numpy()),
                "ci_low": float(np.quantile(boots, 0.025)) if len(boots) > 10 else float("nan"),
                "ci_high": float(np.quantile(boots, 0.975)) if len(boots) > 10 else float("nan"),
-               "r2_between_entities": r2, "n_units": int(len(g)), "n_entities": int(g["entity"].nunique())}
+               **between, "n_units": int(len(g)), "n_entities": int(g["entity"].nunique())}
         for cls, gc in g.groupby("token_class"):
             row[f"pooled_tok{cls}"] = _pooled(gc["ne"].to_numpy(), gc["delta"].to_numpy())
             row[f"n_entities_tok{cls}"] = int(gc["entity"].nunique())
@@ -262,7 +281,7 @@ def choose_layers(rec: pd.DataFrame) -> dict[str, Any]:
             alt = int(r["layer"])
             break
     return {"spec_layer": int(best["layer"]), "spec_recovery": float(best["pooled_recovery"]),
-            "spec_r2_between": float(best["r2_between_entities"]),
+            "spec_r2_between": float(best["r2_between_entities"]), "spec_r2_centered": float(best["r2_centered"]),
             "spec_warning": bool(best["pooled_recovery"] < SPEC_RECOVERY_WARN), "alt_layer": alt}
 
 
@@ -298,7 +317,11 @@ def run_localize(cfg: Config, model_id: str, force: bool = False, prompt_mode: s
                 stages.record_model_revision(sdir, state["lm"].model)
                 state["letters"] = letter_token_ids(state["lm"].tokenizer)
                 n_blocks = len(get_blocks(state["lm"].model))
-                state["cfgs"] = configurations(n_blocks, lz.layer_stride, lz.band)
+                stride = lz.layer_stride or cfg.extract.layer_stride
+                state["cfgs"] = configurations(n_blocks, stride, lz.band)
+                if not state["cfgs"]:
+                    raise ValueError(f"localize layer stride {stride} leaves no scanned layer below the model's "
+                                     f"{n_blocks} blocks")
                 state["layers"] = sorted({lv for _, _, lays in state["cfgs"] for lv in lays})
                 log.info("localize: %d blocks, %d transplant configurations per direction and unit, layers %s",
                          n_blocks, len(state["cfgs"]), state["layers"])
@@ -359,22 +382,27 @@ def write_localize_summary(sdir: Path, model_id: str, cfg: Config, rec: pd.DataF
     lz = cfg.localize
     lines = [f"# Localisation summary: {model_id} (dev, evidence 0)", "",
              f"- units (pair x rotation): {n_units} of {n_selected} selected ({lz.pairs_per_entity} pairs per entity, "
-             f"rotations {lz.rotations}); layer stride {lz.layer_stride}; band {lz.band} layers; elapsed "
+             f"rotations {lz.rotations}); layer stride {lz.layer_stride or cfg.extract.layer_stride}; band "
+             f"{lz.band} layers; elapsed "
              f"{elapsed:.0f}s",
              "- knock-in = placebo run with the real run's residual written in at the site (spec); knock-out = the "
              "reverse. pooled_recovery = sum(ne*delta)/sum(ne^2) over units (1 = the whole name effect moves with "
-             "the site); r2_between_entities = how much of the between-entity variation of name effects the "
-             "transplant reproduces (what M4 ranks on).", "",
+             "the site). Across entity means: r2_between_entities = 1 - sum(ne-delta)^2 / sum(ne-mean)^2 (identity "
+             "line; uniform under-recovery and offsets count against it); r2_centered = 1 - Var(ne-delta)/Var(ne) "
+             "(offset-invariant: the between-entity variance a within-model z of ne-delta would still see); "
+             "corr_between = correlation of ne and delta across entities. Entities are (category, brand).", "",
              "## Layer choice", "",
              f"- spec rule (highest pooled knock-in recovery at name_last): layer {choice['spec_layer']}, recovery "
-             f"{_fmt(choice['spec_recovery'])}, between-entity R^2 {_fmt(choice.get('spec_r2_between'))}",
+             f"{_fmt(choice['spec_recovery'])}, between-entity R^2 {_fmt(choice.get('spec_r2_between'))} "
+             f"(centred {_fmt(choice.get('spec_r2_centered'))})",
              f"- pre-registered alternative (deepest layer with pooled >= {ALT_POOLED_MIN} and >= {ALT_CLASS_MIN} in "
              f"every token class with >= {ALT_CLASS_MIN_ENTITIES} entities): {choice['alt_layer']}"]
     if choice["spec_warning"]:
         lines.append(f"- **WARNING: the best knock-in recovery at the name's last token is below {SPEC_RECOVERY_WARN}; "
                      f"a transplant at that site cannot carry the full name effect (spec §7.6). Look at post_name / "
                      f"band below to see where the effect lives.**")
-    cols = ["direction", "site", "layer", "pooled_recovery", "ci_low", "ci_high", "r2_between_entities"] + \
+    cols = ["direction", "site", "layer", "pooled_recovery", "ci_low", "ci_high", "r2_between_entities",
+            "r2_centered", "corr_between"] + \
         [c for c in rec.columns if c.startswith("pooled_tok")] + ["n_units", "n_entities"]
     for direction, title in (("in", "Knock-in (placebo run <- real states)"),
                              ("out", "Knock-out (real run <- placebo states)")):

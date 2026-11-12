@@ -28,7 +28,7 @@ from rtp.data.choice_items import LETTERS
 log = logging.getLogger(__name__)
 
 N_ROTATIONS = 4
-ITEM_META = ["item_id", "pair_id", "card_set", "category", "pair_entity", "evidence_level", "handicap", "target_is_placebo",
+ITEM_META = ["item_id", "pair_id", "card_set", "placebo_substitute", "category", "pair_entity", "evidence_level", "handicap", "target_is_placebo",
              "rotation", "target_label"]
 
 
@@ -47,7 +47,7 @@ def rotation_average(scores: pd.DataFrame, meta: pd.DataFrame, col: str = "s_tar
                                                                          validate="one_to_one")
     keys = ["pair_id", "target_is_placebo"]
     g = df.groupby(keys, sort=True)
-    extra = {"card_set": ("card_set", "first")} if "card_set" in df else {}
+    extra = {c: (c, "first") for c in ("card_set", "placebo_substitute") if c in df}
     out = g.agg(category=("category", "first"), entity=("pair_entity", "first"), **extra,
                 evidence_level=("evidence_level", "first"), handicap=("handicap", "first"),
                 s_target=("s_target", "mean"), n_rotations=("rotation", "nunique"), n_items=("item_id", "size"))
@@ -76,19 +76,22 @@ def paired_name_effect(pair_scores: pd.DataFrame) -> pd.DataFrame:
         "evidence_level": r["evidence_level"].values, "handicap": r["handicap"].values,
         "s_real": r["s_target"].values, "s_placebo": p["s_target"].values,
     })
-    if "card_set" in r:
-        out.insert(3, "card_set", r["card_set"].values)
+    for k, c in enumerate(("card_set", "placebo_substitute")):
+        if c in r:
+            out.insert(3 + k, c, r[c].values)
     out["name_effect"] = out["s_real"] - out["s_placebo"]
     return out.sort_values("pair_id").reset_index(drop=True)
 
 
 def entity_evidence_table(ne: pd.DataFrame) -> pd.DataFrame:
     """Rows (category, entity). ``ne_e{k}`` = mean name effect at evidence k (all handicaps), ``se_e{k}`` its
-    standard error and ``n_e{k}`` the number of independent units: card sets (matched cards: the handicap
-    cells of one card set are averaged first, since they share their cards), else pairs. ``ne_e4_h0`` =
-    evidence 4 at handicap 0 only (same card quality as evidence 0-2, so only the evidence differs)."""
+    standard error and ``n_e{k}`` the number of independent units. The unit is the placebo substitute: pairs
+    that share a substitute share that name's own pull (at evidence 0, 24 pairs share 6 substitutes), and at
+    evidence >= 1 each card set has its own substitute, so the handicap cells of one card set (same cards)
+    are averaged first. Without substitute/card-set columns the unit is the pair. ``ne_e4_h0`` = evidence 4
+    at handicap 0 only (same card quality as evidence 0-2, so only the evidence differs)."""
     keys = ["category", "entity"]
-    unit = "card_set" if "card_set" in ne else "pair_id"
+    unit = next((c for c in ("placebo_substitute", "card_set") if c in ne), "pair_id")
     per_unit = ne.groupby(keys + ["evidence_level", unit])["name_effect"].mean().reset_index()
     g = per_unit.groupby(keys + ["evidence_level"])["name_effect"]
     stats = g.agg(["mean", "std", "size"]).reset_index()
@@ -597,7 +600,7 @@ def summarize_measure(cfg: Config, model_id: str, split: str, items: list[dict[s
               "`ne_e4` averages handicaps 0-4; `ne_e4_h0` uses handicap 0 only. Positive = the real name helps.", ""]
     lines += _md_table(table[[c for c in ne_cols if c in table.columns]])
     se_cols = ["category", "entity"] + [c for c in table.columns if c.startswith(("se_", "n_e"))]
-    lines += ["", "Standard errors and independent units (card sets, or pairs at evidence 0):", ""]
+    lines += ["", "Standard errors and independent units (placebo substitutes; at evidence >= 1 one card set each):", ""]
     lines += _md_table(table[se_cols])
     lines += ["", "## Evidence ladder regressions (Huber, through the origin; 95% bootstrap CI over entities)", ""]
     lines += _md_table(pd.DataFrame(fits))

@@ -37,7 +37,7 @@ probe:
   heldout_categories: ["laptop"]  # dev categories used only to test probes
   cv_folds: 5
   k_frame: choice
-  n_null_k: 19  # smoke only: fewer shuffled-label nulls (pilot: 99)
+  n_null_k: 39  # smoke only: fewer shuffled-label nulls (pilot: 99); >= 20 so that p < 0.05 is possible
 localize:
   pairs_per_entity: 1  # smoke only: one pair per entity at one rotation, 3 scanned layers
   rotations: [0]

@@ -104,7 +104,7 @@ class LocalizeConfig:
     """M3 readiness: where is the name effect carried? Full activation transplants on evidence-0 dev pairs."""
     pairs_per_entity: int = 6
     rotations: list[int] = field(default_factory=lambda: [0, 2])
-    layer_stride: int = 2  # scanned hidden-state layers stride, 2*stride, ... < n_blocks (never 0)
+    layer_stride: int | None = None  # scanned layers stride, 2*stride, ... < n_blocks (never 0); None = extract's
     band: int = 5  # consecutive layers patched together in the band transplant
     shard_size: int = 48  # units (pair x rotation) per shard
     units_per_batch: int = 4  # units whose transplant configurations are scored together
@@ -169,7 +169,7 @@ class Config:
         section = dataclasses.asdict({"measure": self.measure, "open_ended": self.open_ended,
                                       "extract": self.extract, "probe": self.probe,
                                       "localize": self.localize}[stage])
-        for k in ("max_batch_size", "max_batch_tokens"):  # batch limits only reorder work; allow resuming after OOM
+        for k in ("max_batch_size", "max_batch_tokens", "units_per_batch"):  # only reorder work: allow resuming
             section.pop(k, None)
         if stage == "open_ended":
             section["shard_size"] = self.measure.shard_size  # open-ended shards by measure.shard_size
@@ -341,14 +341,21 @@ def validate(cfg: Config) -> None:
     need(len(x.choice_rotations) > 0 and set(x.choice_rotations) <= {0, 1, 2, 3}, "extract.choice_rotations in 0-3")
     pr = cfg.probe
     need(pr.k_rank >= 1 and pr.cv_folds >= 2 and pr.n_random_subspaces >= 1, "bad probe sizes")
-    need(isinstance(pr.n_null_k, int) and pr.n_null_k >= 2, "probe.n_null_k must be an integer >= 2")
+    need(isinstance(pr.n_null_k, int) and not isinstance(pr.n_null_k, bool) and pr.n_null_k >= 20,
+         "probe.n_null_k must be an integer >= 20 (a permutation p is >= 1/(n+1); readiness needs p < 0.05)")
     need(len(pr.alphas) > 0 and all(a > 0 for a in pr.alphas), "probe.alphas must be positive")
     need(pr.k_frame in d.probe_frames, "probe.k_frame must be one of data.probe_frames")
     lz = cfg.localize
-    need(all(isinstance(v, int) and v >= 1 for v in (lz.pairs_per_entity, lz.layer_stride, lz.band, lz.shard_size,
+    need(lz.layer_stride is None or (isinstance(lz.layer_stride, int) and not isinstance(lz.layer_stride, bool)
+                                     and lz.layer_stride >= 1), "localize.layer_stride must be null or an integer >= 1")
+    need(all(isinstance(v, int) and not isinstance(v, bool) and v >= 1
+             for v in (lz.pairs_per_entity, lz.band, lz.shard_size,
                                                       lz.units_per_batch, lz.n_boot, lz.max_batch_size,
                                                       lz.max_batch_tokens)), "localize sizes must be integers >= 1")
-    need(len(lz.rotations) > 0 and set(lz.rotations) <= {0, 1, 2, 3}, "localize.rotations in 0-3")
+    need(len(lz.rotations) > 0 and set(lz.rotations) <= {0, 1, 2, 3} and len(set(lz.rotations)) == len(lz.rotations),
+         "localize.rotations: distinct values in 0-3")
+    need(lz.layer_stride is None or lz.layer_stride % x.layer_stride == 0,
+         "localize.layer_stride must be a multiple of extract.layer_stride (M4 needs K at the chosen layer)")
     if d.categories is not None:
         bad = [c for c in pr.heldout_categories if c not in d.categories or c in d.test_categories]
         need(not bad, f"probe.heldout_categories must be dev categories of the run: {bad}")

@@ -58,16 +58,18 @@ TOY = {(): {"D": 0.30, "Nike": 0.20, " B": 0.10, "A": 0.20, "Bev": 0.05, "x": 0.
        ("D",): {"ell": 0.5, "x": 0.5}, ("A",): {" good": 0.25, "x": 0.75}, ("Bev",): {"odel": 0.8, "x": 0.2}}
 
 
-def toy_expand(todo, needs):
+def toy_expand(todo, needs, table=None):
+    table = TOY if table is None else table
     out = []
     for (_, node), need in zip(todo, needs):
-        dist = TOY.get(tuple(PIECES[i] for i in node), {"x": 1.0})
+        dist = table.get(tuple(PIECES[i] for i in node), {"x": 1.0})
         out.append(({t: math.log(dist.get(PIECES[t], 1e-12)) for t in need}, dist.get(" good", 0.0)))
     return out
 
 
-def toy_root():
-    return np.log(np.array([[TOY[()].get(p, 1e-12) for p in PIECES]]))
+def toy_root(table=None):
+    table = TOY if table is None else table
+    return np.log(np.array([[table[()].get(p, 1e-12) for p in PIECES]]))
 
 
 def test_paths_dedup_and_leak_class():
@@ -83,13 +85,39 @@ def test_paths_dedup_and_leak_class():
 
 
 def test_event_masses_letter_collision_article_and_leak():
-    res = batched_tries([toy_paths()], toy_root(), toy_expand)[0]
+    res = batched_tries([toy_paths()], toy_root(), toy_expand, art_set={T[" good"]})[0]
     # A: letter "A" not followed by an article word (0.2 * 0.75) + name "D"+"ell" (0.3 * 0.5)
     # B: " B" (0.1) + "Nike" (0.2); D: letter "D" minus its extension into option A's name (0.3 - 0.15)
     assert res.q[:4] == pytest.approx([0.30, 0.30, 0.0, 0.15], abs=1e-6)
     assert res.q[LEAK] == pytest.approx(0.04, abs=1e-6)
     assert res.q_name[0] == pytest.approx(0.15, abs=1e-6) and res.q_name[1] == pytest.approx(0.20, abs=1e-6)
     assert res.pruned < 10 * EPS
+
+
+def test_article_factor_applies_before_other_class_extensions():
+    """Option B's name starts with the letter token "A" ("A" + "x"). The letter-A event is "A" followed by
+    neither an article word nor option B's name: 0.4 * (1 - 0.5) - 0.2 = 0 (not (0.4 - 0.2) * 0.5)."""
+    table = {(): {"A": 0.4, "Nike": 0.2, "x": 0.4}, ("A",): {" good": 0.5, "x": 0.5}}
+    paths = build_item_paths(TOK, ["Nike", "Ax", "Puma", "Dell"], None, LETTER_IDS, {})
+    res = batched_tries([paths], toy_root(table), lambda todo, needs: toy_expand(todo, needs, table),
+                        art_set={T[" good"]})[0]
+    assert res.q[:4] == pytest.approx([0.2, 0.2, 0.0, 0.0], abs=1e-6)
+    assert res.article == pytest.approx(0.2, abs=1e-6)
+
+
+def test_answer_continuations_are_not_articles():
+    from rtp.measure.answers import article_ids
+
+    class Tok:
+        pieces = [" good", " is", " would", " great", "A", " and"]
+
+        def __len__(self):
+            return len(self.pieces)
+
+        def batch_decode(self, seqs):
+            return [self.pieces[s[0]] for s in seqs]
+
+    assert article_ids(Tok()) == frozenset({0, 3})
 
 
 def test_pruned_mass_is_reported():
@@ -196,10 +224,19 @@ def test_matched_card_sets_share_cards_across_cells():
                 assert o["name"] == r["name"]
                 if g["evidence_level"] == 4 and o["role"] != "target":
                     assert o == r  # same cards; only the target's rating moves with the handicap
-    bad = [dict(it) for it in items]
-    j = next(i for i, it in enumerate(bad) if it["evidence_level"] == 2)
-    bad[j]["placebo_substitute"] = "Something Else"
-    with pytest.raises(SchemaError):
+    # change a competitor's price consistently in all 8 items of ONE pair (both versions, all rotations): the pair
+    # check passes, so only the card-set check can catch that this cell no longer shows the set's cards
+    import copy
+
+    pid = next(it["pair_id"] for it in items if it["evidence_level"] == 2)
+    bad = copy.deepcopy(items)
+    comp = next(o["name"] for o in next(it for it in bad if it["pair_id"] == pid)["options"] if o["role"] == "competitor")
+    for it in bad:
+        if it["pair_id"] == pid:
+            for o in it["options"]:
+                if o["name"] == comp:
+                    o["price"] = o["price"] + 1
+    with pytest.raises(SchemaError, match="card set .* field 'price'"):
         validate_choice_items(bad)
 
 
@@ -222,7 +259,7 @@ def _brute_force(lm, prefix, paths, art_ids):
 
 
 @pytest.mark.integration
-def test_answer_distributions_match_brute_force(smoke_lm):
+def test_answer_distributions_match_brute_force(smoke_lm, monkeypatch):
     import torch
 
     from rtp.measure.answers import answer_distributions, article_ids
@@ -236,13 +273,20 @@ def test_answer_distributions_match_brute_force(smoke_lm):
     paths = item_answer_paths(smoke_lm.tokenizer, items, letters)
     free = render_inputs(smoke_lm, [it["prompt"] for it in items], prefill=False)
     forced = render_inputs(smoke_lm, [it["prompt"] for it in items], prefill=True)
+    import rtp.measure.answers as answers_mod
+
+    def no_fallback(msg, *args):
+        if "cache extension failed" in msg:
+            raise AssertionError(msg % args)
+
+    monkeypatch.setattr(answers_mod.log, "debug", no_fallback)  # the KV-cache path must be the one tested
     res = answer_distributions(smoke_lm, free, forced, paths, max_batch_size=4, max_batch_tokens=4096)
     art = torch.tensor(sorted(article_ids(smoke_lm.tokenizer)))
     worst = 0.0
     for i in range(len(items)):
         for pos, prefix in (("free", free[i]), ("forced", forced[i])):
             lm_, ar = _brute_force(smoke_lm, prefix, paths[i], art)
-            q_ref, _ = event_masses(paths[i], lm_, ar)
+            q_ref = event_masses(paths[i], lm_, ar, frozenset(art.tolist()))[0]
             got = res[i][pos]
             worst = max(worst, float(np.abs(got.q - q_ref).max()) - got.pruned)
     assert worst < 1e-3

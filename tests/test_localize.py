@@ -33,6 +33,10 @@ def test_select_units_balanced_over_substitutes():
         subs = {r["placebo_substitute"] for r, _ in units if r["pair_entity"] == ent}
         assert len(subs) == 3
     assert select_units(items, cfg) == units  # deterministic
+    # fewer pairs than substitutes: entities must not all get the same (alphabetically first) substitutes
+    cfg2 = _cfg(pairs_per_entity=2, rotations=[0])
+    used = {r["placebo_substitute"] for r, _ in select_units(items, cfg2)}
+    assert len(used) == 3
 
 
 def test_configurations_never_patch_embeddings():
@@ -49,7 +53,7 @@ def _synthetic(rec_at: dict[int, float], n_ent: int = 6, cls_of=lambda e: "1") -
         for u in range(2):
             uid = f"e{e}-u{u}"
             ne = (e - (n_ent - 1) / 2) + 0.1 * u  # name effects of both signs
-            base = {"unit_id": uid, "entity": f"E{e}", "token_class": cls_of(e), "layers": ""}
+            base = {"unit_id": uid, "category": "c", "entity": f"E{e}", "token_class": cls_of(e), "layers": ""}
             s_p = rng.normal()
             rows += [{**base, "direction": "clean", "receiver": "real", "site": "none", "layer": -1, "s_target": s_p + ne},
                      {**base, "direction": "clean", "receiver": "placebo", "site": "none", "layer": -1,
@@ -70,6 +74,26 @@ def test_recovery_table_pooled_and_between_entity_r2():
     assert r.loc[("in", 8), "r2_between_entities"] == pytest.approx(1.0)
     assert r.loc[("in", 4), "r2_between_entities"] < 0.9
     assert r.loc[("in", 4), "ci_low"] <= 0.5 <= r.loc[("in", 4), "ci_high"]
+
+
+def test_entities_are_category_and_brand():
+    df = _synthetic({4: 0.5}, n_ent=4)
+    other = df.copy()
+    other["category"] = "d"  # the same brand names in a second category are different entities
+    other["unit_id"] = "d-" + other["unit_id"]
+    rec = recovery_table(pd.concat([df, other]), n_boot=20, seed=0)
+    assert set(rec["n_entities"]) == {8}
+
+
+def test_between_entity_fit_is_offset_invariant_where_it_says_so():
+    from rtp.detect.localize import between_entity_fit
+
+    ne = np.array([-2.0, -1.0, 0.5, 1.0, 3.0])
+    shifted = between_entity_fit(ne, ne - 0.3)  # perfect ranking, constant offset
+    assert shifted["r2_centered"] == pytest.approx(1.0) and shifted["corr_between"] == pytest.approx(1.0)
+    assert shifted["r2_between_entities"] < 1.0
+    scaled = between_entity_fit(ne, 0.8 * ne)
+    assert scaled["corr_between"] == pytest.approx(1.0) and scaled["r2_centered"] == pytest.approx(1 - 0.04)
 
 
 def test_choose_layers_spec_argmax_and_alternative():

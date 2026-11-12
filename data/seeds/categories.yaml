@@ -60,7 +60,7 @@ categories:
       - {name: Reebok, tier: budget, aliases: []}
       - {name: Skechers, tier: budget, aliases: []}
       - {name: Merrell, tier: mid, aliases: []}
-      - {name: Topo Athletic, tier: mid, aliases: [Topo]}
+      - {name: Topo Athletic, tier: mid, aliases: [Topo], match_case: true}
       - {name: Karhu, tier: mid, aliases: []}
       - {name: Diadora, tier: mid, aliases: []}
     card:
@@ -188,7 +188,7 @@ categories:
       - {name: Polaroid, tier: budget, aliases: []}
       - {name: Blackmagic Design, tier: premium, aliases: [Blackmagic]}
       - {name: Insta360, tier: mid, aliases: []}
-      - {name: Phase One, tier: premium, aliases: []}
+      - {name: Vivitar, tier: budget, aliases: []}
     card:
       price: [500, 2500]
       rating: [4.0, 4.8]
@@ -196,10 +196,10 @@ categories:
       features:
         - "24-megapixel sensor"
         - "4K video"
-        - "in-body stabilization"
+        - "image stabilization"
         - "tilting touchscreen"
-        - "electronic viewfinder"
-        - "dual card slots"
+        - "built-in microphone"
+        - "USB-C charging"
         - "weather sealing"
         - "Wi-Fi and Bluetooth"
       descriptions:
@@ -226,9 +226,9 @@ categories:
       - {name: "Nescafé", tier: budget, aliases: [Nescafe]}
       - {name: Intelligentsia, tier: premium, aliases: [Intelligentsia Coffee]}
       - {name: Counter Culture, tier: premium, aliases: [Counter Culture Coffee]}
-      - {name: "Eight O'Clock", tier: budget, aliases: ["Eight O'Clock Coffee", Eight OClock]}
+      - {name: "Eight O'Clock", tier: budget, aliases: ["Eight O'Clock Coffee", Eight OClock], match_case: true}
       - {name: Green Mountain, tier: mid, aliases: [Green Mountain Coffee]}
-      - {name: Caribou Coffee, tier: mid, aliases: [Caribou]}
+      - {name: Caribou Coffee, tier: mid, aliases: [Caribou], match_case: true}
       - {name: Kicking Horse, tier: mid, aliases: [Kicking Horse Coffee]}
       - {name: Tim Hortons, tier: budget, aliases: ["Tim Horton's"]}
     card:
@@ -266,9 +266,9 @@ categories:
       - {name: Hamilton, tier: mid, aliases: []}
       - {name: Breitling, tier: premium, aliases: []}
       - {name: Longines, tier: premium, aliases: []}
-      - {name: Patek Philippe, tier: premium, aliases: [Patek]}
-      - {name: Audemars Piguet, tier: premium, aliases: []}
-      - {name: Cartier, tier: premium, aliases: []}
+      - {name: Movado, tier: mid, aliases: []}
+      - {name: Invicta, tier: budget, aliases: [], match_case: true}
+      - {name: Daniel Wellington, tier: budget, aliases: [DW]}
       - {name: Orient, tier: budget, aliases: [], match_case: true}
       - {name: Fossil, tier: budget, aliases: [], match_case: true}
       - {name: Swatch, tier: budget, aliases: []}
@@ -308,7 +308,7 @@ categories:
       - {name: Modelo, tier: mid, aliases: []}
       - {name: Miller, tier: budget, aliases: [Miller Lite, Miller High Life]}
       - {name: Michelob, tier: mid, aliases: [Michelob Ultra]}
-      - {name: Blue Moon, tier: mid, aliases: []}
+      - {name: Blue Moon, tier: mid, aliases: [], match_case: true}
       - {name: Pabst, tier: budget, aliases: [Pabst Blue Ribbon, PBR]}
       - {name: Dos Equis, tier: mid, aliases: []}
       - {name: Asahi, tier: mid, aliases: [Asahi Super Dry]}
@@ -355,7 +355,7 @@ categories:
       - {name: Cheez-It, tier: budget, aliases: [Cheez-Its, Cheez It]}
       - {name: Nature Valley, tier: mid, aliases: []}
       - {name: SunChips, tier: mid, aliases: [Sun Chips]}
-      - {name: Kettle Brand, tier: premium, aliases: [Kettle Chips]}
+      - {name: Kettle Brand, tier: premium, aliases: []}
       - {name: Quest, tier: premium, aliases: [Quest Nutrition, Quest Bar], match_case: true}
     card:
       price: [2, 7]
@@ -438,7 +438,7 @@ categories:
       - {name: Mercedes-Benz, tier: premium, aliases: [Mercedes, Mercedes Benz]}
       - {name: BYD, tier: budget, aliases: []}
       - {name: Volvo, tier: premium, aliases: []}
-      - {name: Porsche, tier: premium, aliases: []}
+      - {name: Honda, tier: mid, aliases: [Honda Prologue]}
       - {name: Cadillac, tier: premium, aliases: []}
       - {name: Toyota, tier: mid, aliases: []}
     card:
@@ -476,14 +476,14 @@ categories:
       - {name: Philips, tier: mid, aliases: []}
       - {name: Sharp, tier: mid, aliases: [], match_case: true}
       - {name: Toshiba, tier: budget, aliases: []}
-      - {name: Insignia, tier: budget, aliases: []}
+      - {name: Insignia, tier: budget, aliases: [], match_case: true}
       - {name: Roku, tier: budget, aliases: []}
       - {name: Amazon, tier: budget, aliases: [Fire TV, Amazon Fire TV]}
       - {name: Skyworth, tier: budget, aliases: []}
       - {name: Westinghouse, tier: budget, aliases: []}
       - {name: JVC, tier: budget, aliases: []}
       - {name: Element, tier: budget, aliases: [Element Electronics], match_case: true}
-      - {name: Bang & Olufsen, tier: premium, aliases: [Bang and Olufsen, B&O]}
+      - {name: Bang & Olufsen, tier: premium, aliases: [Bang and Olufsen]}
     card:
       price: [250, 2000]
       rating: [4.0, 4.8]
@@ -511,7 +511,7 @@ categories:
       - {name: Dyson, tier: premium, aliases: []}
       - {name: Shark, tier: mid, aliases: [SharkNinja], match_case: true}
       - {name: Bissell, tier: budget, aliases: [BISSELL]}
-      - {name: Hoover, tier: budget, aliases: []}
+      - {name: Hoover, tier: budget, aliases: [], match_case: true}
       - {name: Miele, tier: premium, aliases: []}
       - {name: iRobot, tier: premium, aliases: [Roomba]}
       - {name: Eureka, tier: budget, aliases: [], match_case: true}
@@ -531,12 +531,12 @@ categories:
       rating: [4.0, 4.8]
       n_reviews: [100, 20000]
       features:
-        - "cordless design"
+        - "quiet mode"
         - "HEPA filter"
         - "60-minute runtime"
         - "bagless dustbin"
-        - "LED headlight"
-        - "wall-mounted dock"
+        - "edge-cleaning brush"
+        - "washable filter"
         - "pet hair attachment"
         - "weighs 6 lb"
       descriptions:
@@ -560,7 +560,7 @@ categories:
       - {name: Breville, tier: premium, aliases: []}
       - {name: NutriBullet, tier: budget, aliases: [Nutribullet]}
       - {name: Black+Decker, tier: budget, aliases: [Black & Decker, Black and Decker, BLACK+DECKER]}
-      - {name: Magic Bullet, tier: budget, aliases: []}
+      - {name: Magic Bullet, tier: budget, aliases: [], match_case: true}
       - {name: Waring, tier: mid, aliases: []}
       - {name: Braun, tier: mid, aliases: []}
       - {name: Kenwood, tier: mid, aliases: []}
@@ -684,12 +684,12 @@ categories:
       - {name: Fanta, tier: mid, aliases: []}
       - {name: 7 Up, tier: budget, aliases: [7UP, 7-Up, Seven Up]}
       - {name: Canada Dry, tier: budget, aliases: []}
-      - {name: "A&W", tier: budget, aliases: [A&W Root Beer]}
+      - {name: "A&W", tier: budget, aliases: [A&W Root Beer], match_case: true}
       - {name: Schweppes, tier: mid, aliases: []}
       - {name: Sunkist, tier: budget, aliases: []}
       - {name: Crush, tier: budget, aliases: [Orange Crush], match_case: true}
       - {name: "Barq's", tier: budget, aliases: [Barqs]}
-      - {name: Big Red, tier: budget, aliases: []}
+      - {name: Big Red, tier: budget, aliases: [], match_case: true}
       - {name: RC Cola, tier: budget, aliases: [Royal Crown, Royal Crown Cola]}
       - {name: Jarritos, tier: mid, aliases: []}
       - {name: Olipop, tier: premium, aliases: [OLIPOP]}
@@ -722,11 +722,11 @@ categories:
       - {name: Canon, tier: mid, aliases: []}
       - {name: Epson, tier: mid, aliases: []}
       - {name: Brother, tier: mid, aliases: [], match_case: true}
-      - {name: Xerox, tier: premium, aliases: []}
+      - {name: Xerox, tier: premium, aliases: [], match_case: true}
       - {name: Lexmark, tier: mid, aliases: []}
       - {name: Kyocera, tier: premium, aliases: []}
       - {name: Ricoh, tier: premium, aliases: []}
-      - {name: Samsung, tier: budget, aliases: []}
+      - {name: Olivetti, tier: mid, aliases: []}
       - {name: Dell, tier: mid, aliases: []}
       - {name: Sharp, tier: mid, aliases: [], match_case: true}
       - {name: Konica Minolta, tier: premium, aliases: []}
@@ -761,7 +761,7 @@ categories:
     needs_review: true
     brands:
       - {name: Pantene, tier: mid, aliases: []}
-      - {name: Head & Shoulders, tier: budget, aliases: [Head and Shoulders]}
+      - {name: Head & Shoulders, tier: budget, aliases: [Head and Shoulders], match_case: true}
       - {name: Dove, tier: mid, aliases: [], match_case: true}
       - {name: "TRESemmé", tier: budget, aliases: [Tresemme, TRESemme]}
       - {name: Garnier, tier: budget, aliases: [Garnier Fructis, Fructis]}
@@ -776,7 +776,7 @@ categories:
       - {name: Neutrogena, tier: mid, aliases: []}
       - {name: Nexxus, tier: premium, aliases: []}
       - {name: Aussie, tier: budget, aliases: [], match_case: true}
-      - {name: Pert, tier: budget, aliases: [Pert Plus]}
+      - {name: Pert, tier: budget, aliases: [Pert Plus], match_case: true}
       - {name: Olaplex, tier: premium, aliases: [OLAPLEX]}
     card:
       price: [5, 40]

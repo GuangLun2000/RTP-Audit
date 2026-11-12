@@ -24,6 +24,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+import unicodedata
 from collections.abc import Sequence
 from typing import Any
 
@@ -48,12 +49,22 @@ ANSWER_PREFILL = "Answer:"  # chat checkpoints: assistant turn prefilled so the 
 RESULT_COLUMNS = ["item_id", "model_id", "p_A", "p_B", "p_C", "p_D", "s_target", "gen_letter"]
 LOW_COVERAGE = 0.9  # below this mean option-answer coverage at a position, that position's readout is partial
 # A letter counts only in an answer-like position: after an explicit label ("Answer:", "The answer is",
-# "Option"), at the very start, or right after "pick/choose/go with/select/recommend". Only a bare leading
-# "A" followed by a lowercase word ("A good choice") is read as the English article, not as an answer.
+# "Option"), at the very start, or right after "pick/choose/go with/select/recommend". A bare leading "A"
+# followed by a lowercase word ("A good choice") is read as the English article, unless that word is an
+# answer continuation ("A is the best", "A would suit you"; the same list as the estimator's article rule).
 _MARK = r"[\s\"'*_(\[]*"
 _LABEL_RE = re.compile(r"^" + _MARK + r"(?i:(?:the\s+)?(?:correct\s+)?(?:answer|option|choice))" + _MARK
                        + r"(?i:is)?" + _MARK + r"[:\-]?" + _MARK + r"([ABCD])(?![A-Za-z0-9])")
-_BARE_RE = re.compile(r"^" + _MARK + r"(?:([BCD])|(A)(?!\s+[a-z]))(?![A-Za-z0-9])")
+
+
+def _continuations() -> str:
+    from rtp.measure.answers import ANSWER_CONTINUATIONS
+
+    return "|".join(sorted(ANSWER_CONTINUATIONS, key=len, reverse=True))
+
+
+_ARTICLE_A = r"A\s+(?!(?:" + _continuations() + r")\b)[a-z]"  # "A good ..." but not "A is ..."
+_BARE_RE = re.compile(r"^" + _MARK + r"(?:([BCD])|(?!" + _ARTICLE_A + r")(A))(?![A-Za-z0-9])")
 _LETTER_VERB_RE = re.compile(r"(?i:\b(?:pick|choose|go\s+with|select|recommend)\s+(?:option\s+)?)" + _MARK
                              + r"([ABCD])(?![A-Za-z0-9])")
 
@@ -99,22 +110,32 @@ def parse_letter(text: str | None) -> str | None:
     return m.group(1) if m else None
 
 
+def _ascii(text: str) -> str:
+    """Accents stripped ("L'Oréal" -> "L'Oreal"), curly apostrophes straightened."""
+    t = unicodedata.normalize("NFKD", text.replace("\u2019", "'"))
+    return "".join(ch for ch in t if not unicodedata.combining(ch))
+
+
 def _norm(text: str) -> str:
-    return re.sub(r"[^0-9a-z]+", " ", text.lower().replace("'", "")).strip()
+    return re.sub(r"[^0-9a-z]+", " ", _ascii(text).lower().replace("'", "")).strip()
 
 
 def parse_answer(text: str | None, options: Sequence[dict[str, Any]]) -> str | None:
-    """Option letter of a FREE answer: an answer letter, else the option whose brand name it names.
-
-    A name counts as a whole word anywhere in the text (earliest wins), or as a truncated prefix of a
-    single option name (generation stops after a few tokens: "Bev" -> "Bevodel").
+    """Option letter of a FREE answer: the option whose brand name the answer starts with ("A&W is ..."), else an
+    answer letter, else the option whose name appears as a whole word (earliest wins), else the option whose
+    name the WHOLE short answer is a truncated prefix of (generation stops after a few tokens: "Bev" ->
+    "Bevodel", "New Bal" -> "New Balance"; a prose opening such as "The best choice" is not a prefix).
     """
-    letter = parse_letter(text)
-    if letter or not text:
-        return letter
-    t = _norm(text)
-    if not t:
+    if not text:
         return None
+    t = _norm(text)
+    for o in options:  # a name at the very start wins over a letter reading of its first character
+        n = _norm(o["name"])
+        if n and re.match(re.escape(n) + r"s?(?![0-9a-z])", t):
+            return o["label"]
+    letter = parse_letter(_ascii(text))
+    if letter or not t:
+        return letter
     best = None
     for o in options:
         n = _norm(o["name"])
@@ -123,8 +144,8 @@ def parse_answer(text: str | None, options: Sequence[dict[str, Any]]) -> str | N
             best = (m.start(), o["label"])
     if best:
         return best[1]
-    first = t.split()[0] if t.split() else ""
-    cands = [o["label"] for o in options if len(first) >= 3 and _norm(o["name"]).replace(" ", "").startswith(first)]
+    joined = t.replace(" ", "")
+    cands = [o["label"] for o in options if len(joined) >= 3 and _norm(o["name"]).replace(" ", "").startswith(joined)]
     return cands[0] if len(cands) == 1 else None
 
 
@@ -154,7 +175,7 @@ DEFERRED_MAX_TOKENS = 48  # free answers that start with prose are continued thi
 # "I'd go with D". A bare "Option B" is not a cue (models enumerate the options before concluding).
 _STRONG_CUE = (r"(?i:\b(?:answer(?:\s+is)?|(?:option|choice|pick)\s+(?:is|would\s+be|will\s+be)|"
                r"recommend(?:ation)?(?:\s+is)?|(?:i\s+would|i'd|i\s+will|i'll)\s+(?:choose|pick|go\s+with|select)|"
-               r"choose|go\s+with|select)\b)[\s:*\"'(\[\-]*(?:option\s+|the\s+)?")
+               r"choose|go\s+with|select)\b)[\s:*\"'(\[\-]*(?i:option\s+|the\s+)?")
 _STRONG_LETTER = re.compile(_STRONG_CUE + r"([ABCD])(?![A-Za-z0-9])")
 _BARE_LETTER = re.compile(r"(?<![A-Za-z0-9'])([ABCD])(?![A-Za-z0-9'])")
 
@@ -162,7 +183,7 @@ _BARE_LETTER = re.compile(r"(?<![A-Za-z0-9'])([ABCD])(?![A-Za-z0-9'])")
 def _name_patterns(options: Sequence[dict[str, Any]]) -> list[tuple[str, str]]:
     out = []
     for o in options:
-        words = [w for w in re.split(r"[^0-9A-Za-z]+", o["name"]) if w]
+        words = [w for w in re.split(r"[^0-9A-Za-z]+", _ascii(o["name"])) if w]
         if words:  # "Levi's" matches "Levis" / "Levi's"; "New Balance" matches "New-Balance"
             out.append((o["label"], r"(?<![0-9A-Za-z])(?i:" + r"[^0-9A-Za-z]*".join(map(re.escape, words))
                         + r")(?![0-9A-Za-z])"))
@@ -179,15 +200,20 @@ def parse_final_answer(text: str | None, options: Sequence[dict[str, Any]]) -> s
     """
     if not text:
         return None
-    t = text.replace("\u2019", "'")
+    t = _ascii(text)
     names = _name_patterns(options)
-    strong = [(m.end(), m.group(1)) for m in _STRONG_LETTER.finditer(t)]
+    spans = [m.span() for _, pat in names for m in re.finditer(pat, t)]
+
+    def in_name(pos: int) -> bool:  # the "A" of "A&W" is part of a name, not a letter answer
+        return any(a <= pos < b for a, b in spans)
+
+    strong = [(m.end(), m.group(1)) for m in _STRONG_LETTER.finditer(t) if not in_name(m.start(1))]
     for label, pat in names:
         strong += [(m.end(), label) for m in re.finditer(_STRONG_CUE + pat, t)]
     if strong:
         return max(strong)[1]
     mentioned = {m.group(1) for m in _BARE_LETTER.finditer(t)
-                 if not (m.group(1) == "A" and re.match(r"A\s+[a-z]", t[m.start():]))}
+                 if not in_name(m.start()) and not (m.group(1) == "A" and re.match(_ARTICLE_A, t[m.start():]))}
     mentioned |= {label for label, pat in names if re.search(pat, t)}
     return mentioned.pop() if len(mentioned) == 1 else None
 

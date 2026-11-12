@@ -11,7 +11,8 @@ its mass is >= ``EPS``; the mass of pruned prefixes is reported as an error boun
 the classes disjoint: a path's mass minus the mass of its minimal extensions that belong to another
 class (letter "D" excludes "D"+"ell" when Dell is an option), and a letter path of option A is
 multiplied by 1 - P(next token = space + lowercase word) (the article in "A good choice" is not an
-answer). q_j = sum of option j's event masses; coverage c = sum_j q_j.
+answer; tokens in ANSWER_CONTINUATIONS such as " is" are not articles: "A is the best"). q_j = sum of option j's
+event masses; coverage c = sum_j q_j.
 
 Two positions come from ONE forward pass: the free assistant start x_free (spec 7.1) and the forced
 position after the "Answer:" prefill, x_forced = x_free + suffix tokens (verified per item; otherwise two
@@ -58,10 +59,19 @@ class ItemPaths:
     a_letter: set[tuple[int, ...]] = field(default_factory=set)  # option-A letter paths (article rule)
 
 
+# Words that follow a bare "A" when it IS the answer ("A is the best choice", "A would suit you"); every other
+# space + lowercase token after "A" is read as the article ("A good choice ...").
+ANSWER_CONTINUATIONS = frozenset(
+    "is are was were would will could should might may can seems seem looks look has have had offers offer "
+    "provides provide gives give stands appears sounds fits ranks comes wins beats edges and or because since as "
+    "for with from at by to then also still here which that if but so".split())
+
+
 @lru_cache(maxsize=None)
 def _article_ids(tok_key: int, tokenizer: Any) -> frozenset[int]:
     decoded = tokenizer.batch_decode([[i] for i in range(len(tokenizer))])
-    return frozenset(i for i, s in enumerate(decoded) if re.match(r"^ [a-z]", s))
+    return frozenset(i for i, s in enumerate(decoded)
+                     if re.match(r"^ [a-z]", s) and s.strip() not in ANSWER_CONTINUATIONS)
 
 
 def article_ids(tokenizer: Any) -> frozenset[int]:
@@ -107,35 +117,45 @@ def needed_nodes(paths: ItemPaths) -> tuple[set[tuple[int, ...]], dict[tuple[int
 
 
 def event_masses(paths: ItemPaths, logmass: dict[tuple[int, ...], float], article: dict[tuple[int, ...], float],
-                 ) -> tuple[np.ndarray, np.ndarray]:
-    """(q per class [5], name-channel mass per class [5]) from path log-masses (missing = pruned = 0)."""
+                 art_set: frozenset[int] | set[int] = frozenset()) -> tuple[np.ndarray, np.ndarray, float]:
+    """(q per class [5], name-channel mass per class [5], article mass removed from option A) from path
+    log-masses (missing = pruned = 0). ``art_set``: token ids counted as the article after a bare "A"."""
     allp = [(c, p, k) for c, cls in enumerate(paths.classes) for p, k in cls]
     q = np.zeros(N_CLASSES)
     qn = np.zeros(N_CLASSES)
+    art_removed = 0.0
     for c, p, kind in allp:
         if p not in logmass:
             continue
         m = float(np.exp(logmass[p]))
         ext = [r for c2, r, _ in allp if c2 != c and len(r) > len(p) and r[: len(p)] == p]
         minimal = [r for r in ext if not any(len(p) < len(s) < len(r) and r[: len(s)] == s for s in ext)]
-        m -= sum(float(np.exp(logmass[r])) for r in minimal if r in logmass)
         if c == 0 and p in paths.a_letter and p in article:
-            m *= 1.0 - article[p]
+            # "A" not followed by the article, minus the extensions into other classes that are not themselves
+            # article continuations (those are already inside the article mass)
+            art_removed += m * article[p]
+            m = m * (1.0 - article[p]) - sum(float(np.exp(logmass[r])) for r in minimal
+                                               if r in logmass and r[len(p)] not in art_set)
+        else:
+            m -= sum(float(np.exp(logmass[r])) for r in minimal if r in logmass)
         m = max(m, 0.0)
         q[c] += m
         if kind == "name":
             qn[c] += m
-    return q, qn
+    return q, qn, art_removed
 
 
 @dataclass
 class PositionResult:
     q: np.ndarray        # [5] event mass per class (A-D, leak)
-    q_name: np.ndarray   # [5] of which through name paths
+    q_name: np.ndarray   # [5] of which through name paths (a name whose first token is its own option's
+    #                      letter token, "D"+"ell" at D, is counted as a letter answer)
     pruned: float        # mass of pruned frontier prefixes (upper bound on missed answer mass)
+    article: float = 0.0  # mass of "A" + article word removed from option A
 
 
-def batched_tries(all_paths: Sequence[ItemPaths], root_lps: np.ndarray, expand_batch) -> list[PositionResult]:
+def batched_tries(all_paths: Sequence[ItemPaths], root_lps: np.ndarray, expand_batch,
+                  art_set: frozenset[int] | set[int] = frozenset()) -> list[PositionResult]:
     """Breadth-first trie evaluation for MANY items at one position. ``expand_batch(todo)`` takes a list of
     (row, node) and returns, per entry, (dict next-token -> logprob for the needed children, article mass).
     All items' nodes of one depth are expanded together, so the number of forward passes is the trie depth."""
@@ -173,8 +193,8 @@ def batched_tries(all_paths: Sequence[ItemPaths], root_lps: np.ndarray, expand_b
         depth += 1
     out = []
     for r, paths in enumerate(all_paths):
-        q, qn = event_masses(paths, logmass[r], article[r])
-        out.append(PositionResult(q=q, q_name=qn, pruned=pruned[r]))
+        q, qn, art = event_masses(paths, logmass[r], article[r], art_set)
+        out.append(PositionResult(q=q, q_name=qn, pruned=pruned[r], article=art))
     return out
 
 
@@ -192,13 +212,23 @@ def _select_cache(cache: Any, rows: torch.Tensor, keep_len: int | None):
     return DynamicCache.from_legacy_cache(tuple(sel))
 
 
+def _check_window(cache: Any, total_len: int) -> None:
+    """Sliding-window cache layers keep only the last ``sliding_window`` positions; slicing them is wrong once the
+    prefix plus the answer path exceeds the window, so refuse (the caller then falls back or raises)."""
+    for layer in getattr(cache, "layers", None) or []:
+        window = getattr(layer, "sliding_window", None)
+        if window is not None and total_len > int(window):
+            raise ValueError(f"sequence of {total_len} tokens exceeds a sliding-window cache of {window}")
+
+
 def _expand_rows(lm: LoadedModel, cache: Any, mask: torch.Tensor, prefixes: list[list[int]], keep_len: int | None,
                  todo: list[tuple[int, tuple[int, ...]]], needs: list[set[int]], art_ids: torch.Tensor,
                  chunk: int, allow_fallback: bool = True) -> list[tuple[dict[int, float], float]]:
     """Next-token log-probs (needed children only) and article mass after each (row, node), batched.
 
     All nodes in ``todo`` have the same length (one trie depth). The prefix comes from the KV cache; if the
-    cache cannot be sliced (e.g. sliding-window caches), the exact but slower full-sequence path is used.
+    cache cannot be used (e.g. a sliding-window cache shorter than prefix + path), the exact but slower
+    full-sequence path is used for unpatched runs, and patched runs raise.
     """
     from rtp.infer import pad_left
 
@@ -208,6 +238,7 @@ def _expand_rows(lm: LoadedModel, cache: Any, mask: torch.Tensor, prefixes: list
         depth = len(part[0][1])
         node_tok = torch.tensor([list(nd) for _, nd in part], dtype=torch.long, device=lm.device)
         try:
+            _check_window(cache, (keep_len if keep_len is not None else mask.shape[1]) + depth)
             rows = torch.tensor([r for r, _ in part], dtype=torch.long, device=mask.device)
             c = _select_cache(cache, rows, keep_len)
             m = mask[rows][:, :keep_len] if keep_len is not None else mask[rows]
@@ -243,7 +274,8 @@ def answer_distributions(lm: LoadedModel, free_ids: Sequence[Sequence[int]], for
     from rtp.patching import patched
 
     tok = lm.tokenizer
-    art_ids = torch.tensor(sorted(article_ids(tok)), dtype=torch.long)
+    art_set = article_ids(tok)
+    art_ids = torch.tensor(sorted(art_set), dtype=torch.long)
     pad_id = tok.pad_token_id
 
     def run_group(batch: list[int], seqs: list[list[int]], ns: int) -> list[dict[str, PositionResult]]:
@@ -266,7 +298,7 @@ def answer_distributions(lm: LoadedModel, free_ids: Sequence[Sequence[int]], for
             def expand_batch(todo, needs, keep=keep, prefixes=prefixes):  # extensions are never patched
                 return _expand_rows(lm, cache, mask, prefixes, keep, todo, needs, art_ids, node_chunk,
                                     allow_fallback=not patches)
-            res[position] = batched_tries([paths[i] for i in batch], logp[:, k, :], expand_batch)
+            res[position] = batched_tries([paths[i] for i in batch], logp[:, k, :], expand_batch, art_set)
         return [{"free": res["free"][r], "forced": res["forced"][r]} for r in range(len(batch))]
 
     def fn(batch: list[int]) -> list[dict[str, PositionResult]]:
@@ -306,4 +338,4 @@ def estimators(free: PositionResult, forced: PositionResult, target: int) -> dic
             "name_share_free": float(free.q_name[:4].sum() / cf) if cf > 0 else float("nan"),
             "name_share_forced": float(forced.q_name[:4].sum() / cx) if cx > 0 else float("nan"),
             "leak_free": float(free.q[LEAK]), "leak_forced": float(forced.q[LEAK]),
-            "pruned_free": free.pruned, "pruned_forced": forced.pruned}
+            "article_free": float(free.article), "pruned_free": free.pruned, "pruned_forced": forced.pruned}

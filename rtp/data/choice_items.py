@@ -7,7 +7,8 @@ the name printed at the target slot (real brand vs a placebo substitute). Each v
 emitted in 4 cyclic rotations so that the target appears once at every letter.
 
 Cards are MATCHED across cells (common random numbers): per target, ``cards_per_cell`` card sets
-are drawn once, and card set k is reused in every (evidence, handicap) cell. Two cells of one card
+are drawn once, and card set k is reused in every (evidence, handicap) cell. Card-set substitutes rotate
+through the category's placebos ((target index + k) mod n_placebo), so placebos are used equally often. Two cells of one card
 set differ only in what is shown (evidence level) and in the target's rating (handicap), so evidence
 and handicap effects can be measured within card sets. Evidence 0 with ``e0_pairs_per_substitute``
 uses its own balanced draws (no card content is visible there).
@@ -93,7 +94,9 @@ def build_choice_items(cfg: Config, seeds: CategorySeeds, catalogue: list[dict[s
 
         for ti, target in enumerate(reals):
             others = [x for x in reals if x != target]
-            card_sets = [draw(None, others) for _ in range(d.cards_per_cell)]
+            # card set k of target ti uses substitute (ti + k) mod n_placebo: every placebo serves equally often
+            # (as at evidence 0), so a placebo name's own pull does not become an entity-specific offset at e1-e4
+            card_sets = [draw((ti + k) % len(placebos), others) for k in range(d.cards_per_cell)]
             for e, h in cells(d.evidence_levels, d.handicaps):
                 if e == 0 and d.e0_pairs_per_substitute:
                     plan = [(f"{spec.code}-t{ti:03d}-e0-{j:03d}", draw(sub, others)) for j, sub in

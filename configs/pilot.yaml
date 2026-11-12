@@ -5,11 +5,14 @@ data:
   categories_file: data/seeds/categories.yaml
   placebo_file: data/seeds/placebo_names.yaml
   natural_negatives_file: data/seeds/natural_negatives.csv
-  # 18 categories x 18 real brands. Test (sealed): 6 Appendix A categories (12 natural negatives) + 2 new ones;
-  # dev: 4 Appendix A categories (8 natural negatives) + 6 new ones (180 dev brands for calibration).
-  categories: ["running shoe", "laptop", "smartphone", "electric car", "television", "blender", "mattress",
-               "soda", "printer", "shampoo",
-               "watch", "beer", "camera", "snack brand", "coffee brand", "sneaker", "vacuum cleaner", "backpack"]
+  # 18 categories x 18 real brands. The test split (sealed) is BRAND-DISJOINT from dev, including the open-ended-only
+  # Appendix A categories: categories that share brands (footwear: running shoe, sneaker, backpack; tech: laptop,
+  # smartphone, camera, television, vacuum cleaner, printer, blender; coffee brand <-> coffee chain) stay in dev.
+  # Test: 4 Appendix A categories (8 natural negatives) + 3 new ones; dev: 6 Appendix A categories (12 natural
+  # negatives) + 5 new ones = 198 dev (category, brand) entities.
+  categories: ["running shoe", "sneaker", "backpack", "laptop", "smartphone", "camera", "television",
+               "vacuum cleaner", "printer", "blender", "coffee brand",
+               "watch", "beer", "snack brand", "electric car", "mattress", "soda", "shampoo"]
   n_real_per_category: 18
   n_placebo_per_category: 6
   evidence_levels: [0, 1, 2, 3, 4]
@@ -17,8 +20,7 @@ data:
   handicap_rating_deltas: [0.0, 0.1, 0.3, 0.5, 1.0]
   cards_per_cell: 4
   e0_pairs_per_substitute: 4  # evidence 0: every target x every placebo substitute x 4
-  test_categories: ["watch", "beer", "camera", "snack brand", "coffee brand", "sneaker", "vacuum cleaner",
-                    "backpack"]
+  test_categories: ["watch", "beer", "snack brand", "electric car", "mattress", "soda", "shampoo"]
   probe_entities_per_category: 30
   probe_templates: 10
 measure:
@@ -40,12 +42,12 @@ extract:
   max_batch_tokens: 32768
 probe:
   k_rank: 18  # 9 encoding patterns + 9 read-outs: every attribute fits (spec default 16)
-  heldout_categories: ["electric car", "mattress"]  # dev categories used only to test probes
+  heldout_categories: ["camera", "blender"]  # dev categories used only to test probes
   cv_folds: 5
   k_frame: choice
   n_null_k: 99  # shuffled-label K / probe nulls per frame x layer (permutation and max-over-layers p)
 localize:
-  pairs_per_entity: 4  # evidence-0 pairs per entity, one per placebo substitute (180 dev brands x 4 x 2 rotations)
+  pairs_per_entity: 4  # evidence-0 pairs per entity, 4 of the 6 substitutes in a per-entity random order
   rotations: [0, 2]
   layer_stride: 2
   band: 5

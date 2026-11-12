@@ -246,12 +246,15 @@ SUGGESTIONS = [
     ("selectivity", "Probes barely beat the control task. Check the layer range, the alpha grid and probe item "
                     "counts; consider the choice-frame probes; do not lower SELECTIVITY_WARN."),
     ("binding", "Probes do not prefer the read entity in two-brand texts. K may encode context, not the entity."),
-    ("K captures", "K captures little of the real-minus-placebo difference: M4's delta_k would be ~0. This is a "
+    ("K capture", "K captures little of the real-minus-placebo difference: M4's delta_k would be ~0. This is a "
                    "method-level finding for the PI, not a bug to patch."),
     ("real-brand transfer", "Placebo-trained probes do not rank real brands by tier: K may not describe real-brand "
                             "knowledge. Method-level finding for the PI."),
     ("familiarity", "Familiarity is not represented in K; identity residuals of famous brands would be inflated. "
                     "Method-level finding for the PI (see DECISIONS.md)."),
+    ("localize:", "A full transplant at the name's last token does not carry the whole name effect. Look at "
+                  "post_name / band in localize/summary.md (where does the effect live?). Method-level finding for "
+                  "the PI before M4; do not change the layer rule after seeing results."),
 ]
 
 
@@ -366,6 +369,10 @@ def build_feedback(cfg: Config, tail: int = 60, unseal: bool = False) -> Path:
             info = io.read_json(p / io.DONE_FILE)
             keep = {k: v for k, v in info.items() if k not in ("finished_with", "ladder_variants")}
             lines.append(f"- **{r['model']} / {r['stage']}**: `{json.dumps(keep, default=str)[:900]}`")
+    for fp in sorted((rdir / "format_probe").glob("*/format_probe.json")):  # dev only by construction
+        res = io.read_json(fp)
+        keep = {k: v for k, v in res.items() if not k.startswith("prompt_tail")}
+        lines.append(f"- **{res.get('model_id')} / format-probe**: `{json.dumps(keep, default=str)[:900]}`")
     lines += ["", "## Log tails of failed or partial stages", ""]
     for r in rows:
         if r["path"] and not r.get("sealed") and (r["state"].startswith("partial") or r["state"] == "stale"):

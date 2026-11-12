@@ -23,8 +23,8 @@ def test_shipped_configs_load():
     smoke = load_config("configs/smoke.yaml")
     pilot = load_config("configs/pilot.yaml")
     assert smoke.name == "smoke" and pilot.name == "pilot"
-    appendix_test = {"watch", "beer", "camera", "snack brand", "coffee brand", "sneaker"}
-    assert set(pilot.data.test_categories) == appendix_test | {"vacuum cleaner", "backpack"}
+    assert set(pilot.data.test_categories) == {"watch", "beer", "snack brand", "electric car", "mattress", "soda",
+                                               "shampoo"}
     assert len(pilot.data.categories) == 18 and set(pilot.data.test_categories) <= set(pilot.data.categories)
     assert not set(pilot.probe.heldout_categories) & set(pilot.data.test_categories)
     assert pilot.data.n_real_per_category == 18 and pilot.data.cards_per_cell == 4
@@ -362,3 +362,22 @@ def test_work_dir_ok_when_drive_mounted_or_elsewhere(monkeypatch, tmp_path):
     monkeypatch.setattr(paths.os.path, "ismount", lambda p: True)
     monkeypatch.setenv("RTP_WORK_DIR", str(tmp_path / "w"))  # not under /content/drive: never checked
     assert paths.work_dir() == tmp_path / "w"
+
+
+def test_pilot_test_split_is_brand_disjoint_from_dev():
+    """Hard constraint 4 in spirit: thresholds developed on dev brands must not be 'tested' on the same brands in
+    another category. Includes the open-ended-only Appendix A categories (always dev)."""
+    from rtp.data.catalogue import load_category_seeds, normalize_name
+
+    pilot = load_config("configs/pilot.yaml")
+    seeds = load_category_seeds(pilot.resolve(pilot.data.categories_file))
+    n = pilot.data.n_real_per_category
+
+    def names(brands):
+        return {normalize_name(x) for b in list(brands)[:n] for x in (b.name, *b.aliases)}
+
+    test = set().union(*(names(seeds.categories[c].brands) for c in pilot.data.test_categories))
+    dev = set().union(*(names(seeds.categories[c].brands) for c in pilot.data.categories
+                        if c not in pilot.data.test_categories))
+    dev |= set().union(*(names(b) for b in seeds.open_ended_only.values()))
+    assert not test & dev, sorted(test & dev)

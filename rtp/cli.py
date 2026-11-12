@@ -32,7 +32,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="override a config value, e.g. --set measure.max_batch_size=128 (YAML value; repeatable)")
     sub = parser.add_subparsers(dest="stage", required=True)
 
-    p = sub.add_parser("smoke", help="end-to-end smoke run (M0 forward, M1 data, M2 measurement)")
+    p = sub.add_parser("smoke", help="end-to-end smoke run (M0 forward, M1 data, M2 measurement, M3 extract, "
+                                     "probe and localize)")
     p.add_argument("--config", default="configs/smoke.yaml")
     p.add_argument("--resume", action="store_true",
                    help="reuse finished smoke outputs instead of starting from a clean runs/<name>/ dir")
