@@ -282,10 +282,14 @@ error (the message says which).
 
 ## Colab
 
+Open the notebook straight from GitHub: [Open in Colab](https://colab.research.google.com/github/GuangLun2000/RTP-Audit/blob/claude/rtp-audit-m0-m2-824c69/colab/run_pilot.ipynb). Cell 1 holds the settings (`REPO_URL`, `PIN`,
+`USE_DRIVE`); Drive is used only for results.
+
 `colab/run_pilot.ipynb` contains the spec §13 steps:
 
 1. Mount Drive and set the environment.
-2. Clone and install. `PIN_COMMIT` optionally pins the code; the notebook checks that torch is unchanged.
+2. Clone the code from GitHub and install it. `PIN` in cell 1 is a branch (updated to its newest push) or a commit
+   hash; the cell stops with ❌ on any failing step, refuses a changed torch and warns when the notebook is outdated.
 3. `doctor` preflight, plus batch sizes chosen for the GPU (H200 or 96 GB).
 4. Smoke and the tests.
 5. `build-data`, then `format-probe` for each model (check the answer format before the long runs).

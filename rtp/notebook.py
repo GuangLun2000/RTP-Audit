@@ -169,3 +169,17 @@ def feedback(config: str) -> Path | None:
     if latest:
         print(f"\n📦 Feedback bundle: {latest}\n   Give this file to the coding agent (see docs/AGENT_LOOP.md).")
     return latest
+
+
+def notebook_rev(path: str | Path) -> str:
+    """Revision of a notebook's CODE cells (sha256, 10 hex digits), with the ``NOTEBOOK_REV = "..."`` line itself
+    blanked. Cell 1 stores it; cell 2 compares the running notebook's value with the repo's copy, so an outdated
+    copy (e.g. saved to Drive) is noticed. tests/test_ops_tooling.py fails when a cell changes without it."""
+    import hashlib
+    import json
+    import re
+
+    nb = json.loads(Path(path).read_text(encoding="utf-8"))
+    code = "\n\0\n".join("".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code")
+    code = re.sub(r'(?m)^NOTEBOOK_REV = "[^"]*"', 'NOTEBOOK_REV = ""', code)
+    return hashlib.sha256(code.encode("utf-8")).hexdigest()[:10]

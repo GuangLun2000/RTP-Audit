@@ -18,7 +18,11 @@ has a tool built for it.
 
 ## 1. Run (PI, on Colab)
 
-Use `colab/run_pilot.ipynb`. Set `REPO_URL` and `PIN_COMMIT` in cell 2 (without a pin, cell 2 checks out `main`).
+Open `colab/run_pilot.ipynb` straight from GitHub ([Open in Colab](https://colab.research.google.com/github/GuangLun2000/RTP-Audit/blob/claude/rtp-audit-m0-m2-824c69/colab/run_pilot.ipynb)), so the newest pushed notebook is the one
+that runs; do not keep a copy on Drive. Settings are in cell 1 (`REPO_URL`, `PIN` = branch or commit, `USE_DRIVE`).
+Cell 2 clones the code from GitHub, updates a pinned branch to its newest push, installs it, refuses a changed torch,
+warns when the open notebook is older than the repo's (`NOTEBOOK_REV`), and stops with ❌ at the first failing step.
+Drive holds only results (`RTP_WORK_DIR`), so finished shards survive a disconnect.
 Run it in stages, so that a problem costs minutes rather than GPU hours:
 
 1. cells 1–5 (environment, code, doctor, smoke and tests, data);
@@ -70,7 +74,7 @@ Give the bundle file to the agent. There is no need to paste the notebook output
 
 ## 4. Re-run (PI)
 
-Run `git pull` (cell 2), then re-run the failed cell. Stage identity covers the stage settings, the model, the
+Re-run cell 2 (it pulls the pushed fix), then the failed cell. Stage identity covers the stage settings, the model, the
 split, the prompt mode, the sha256 of the input files, and the digest of the source of the stage's import
 closure. So:
 
@@ -80,7 +84,10 @@ closure. So:
 - A half-finished stage also refuses to resume under a different torch, transformers or tokenizers version,
   GPU, or model revision.
 
-To make a long pilot exactly reproducible, set `PIN_COMMIT` in cell 2.
+To make a long pilot exactly reproducible, set `PIN` in cell 1 to a commit hash instead of the branch.
+
+After editing the notebook's code cells, update `NOTEBOOK_REV` in cell 1 to `rtp.notebook.notebook_rev(path)`; a test
+fails until it matches, so an outdated copy can always be recognised.
 
 ## Conventions that keep the loop safe
 

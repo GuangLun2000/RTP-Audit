@@ -120,7 +120,7 @@ def test_notebook_covers_spec_cells():
     src = "\n".join("".join(c["source"]) for c in nb["cells"])
     for needle in ('drive.mount("/content/drive")', 'os.environ["RTP_WORK_DIR"] = "/content/drive/MyDrive/rtp"',
                    'os.environ["HF_HOME"] = "/content/hf"', 'userdata.get("HF_TOKEN")', "nvidia-smi",
-                   'pip -q install -e ".[dev]"', 'nb.run("smoke")', "nb.pytest(", '"build-data"', '"measure"',
+                   '"pip", "install", "-q", "-e", ".[dev]"', 'nb.run("smoke")', "nb.pytest(", '"build-data"', '"measure"',
                    '"open-ended"', '"extract"', '"probe"', '"report"', "nb.feedback(CONFIG)", "doctor"):
         assert needle in src, needle
 
@@ -209,3 +209,24 @@ def test_error_events_are_redacted_and_resolved_errors_omitted(work_dir, tmp_pat
     assert cli_main(["status", "--config", str(path)]) == 0  # same stage succeeds later -> resolved
     bundle = build_feedback(load_config(path)).read_text()
     assert "## Errors (0 unresolved; 1 resolved" in bundle and secret not in bundle
+
+
+def test_notebook_bootstraps_from_github_and_is_versioned():
+    """The notebook is opened from GitHub, clones the code from GitHub, and carries a revision of its code cells
+    so that an outdated copy is noticed (bump NOTEBOOK_REV with rtp.notebook.notebook_rev after editing)."""
+    import re
+
+    from rtp.notebook import notebook_rev
+
+    path = REPO_ROOT / "colab" / "run_pilot.ipynb"
+    nb = json.loads(path.read_text(encoding="utf-8"))
+    src = "\n".join("".join(c["source"]) for c in nb["cells"])
+    rev = re.findall(r'(?m)^NOTEBOOK_REV = "([^"]+)"', src)
+    assert rev == [notebook_rev(path)], f"code cells changed: set NOTEBOOK_REV = \"{notebook_rev(path)}\" in cell 1"
+    url = re.search(r'REPO_URL = "([^"]+)"', src).group(1)
+    pin = re.search(r'PIN = "([^"]+)"', src).group(1)
+    assert url.startswith("https://github.com/") and "<" not in url
+    owner_repo = url.removeprefix("https://github.com/").removesuffix(".git")
+    link = f"https://colab.research.google.com/github/{owner_repo}/blob/{pin}/colab/run_pilot.ipynb"
+    assert src.count(link) >= 2  # the "Open in Colab" link (cell 0) and cell 2's outdated-copy message
+    assert "❌" in "".join(nb["cells"][2]["source"]) and "✅ code ready" in "".join(nb["cells"][2]["source"])
