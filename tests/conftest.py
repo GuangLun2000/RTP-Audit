@@ -6,6 +6,7 @@ import pytest
 
 _SMOKE_LM = None
 _SMOKE_ERR: str | None = None
+_SMOKE_LM_FP32 = None
 
 
 @pytest.fixture()
@@ -34,3 +35,22 @@ def smoke_lm():
             pytest.fail(f"smoke model unavailable but RTP_REQUIRE_INTEGRATION=1: {_SMOKE_ERR}")
         pytest.skip(f"smoke model unavailable: {_SMOKE_ERR}")
     return _SMOKE_LM
+
+
+@pytest.fixture(scope="session")
+def smoke_lm_fp32(smoke_lm):
+    """The smoke model in float32 on the same device. Tests that compare two exact computation paths (KV-cache
+    extension vs full forwards, self-transplant vs clean run) need it: on a GPU the stages load bfloat16
+    (spec §3), and bf16 differences between batch shapes (|dq| up to ~0.1) would fail them for numerical, not
+    logical, reasons."""
+    global _SMOKE_LM_FP32
+    import torch
+
+    if next(smoke_lm.model.parameters()).dtype == torch.float32:
+        return smoke_lm
+    if _SMOKE_LM_FP32 is None:  # a float32 copy (the checkpoint is bf16, so upcasting loses nothing);
+        import copy             # load_model itself keeps exactly one argument (hard constraint 1)
+        from dataclasses import replace
+
+        _SMOKE_LM_FP32 = replace(smoke_lm, model=copy.deepcopy(smoke_lm.model).float().eval())
+    return _SMOKE_LM_FP32

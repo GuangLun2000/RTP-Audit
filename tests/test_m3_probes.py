@@ -201,7 +201,8 @@ def test_selected_layers_and_target_span():
 
 # --------------------------------------------------------------------------- integration
 @pytest.mark.integration
-def test_extract_and_probe_on_smoke_model(smoke_lm, work_dir, monkeypatch):
+def test_extract_and_probe_on_smoke_model(smoke_lm_fp32, work_dir, monkeypatch):
+    smoke_lm = smoke_lm_fp32  # batched vs single-forward activations are compared: float32 on any device
     from rtp import io
     from rtp.data.build import build_data, load_probe_items
     from rtp.detect.activations import load_activations, locate, run_extract
@@ -227,8 +228,8 @@ def test_extract_and_probe_on_smoke_model(smoke_lm, work_dir, monkeypatch):
     import torch
 
     with torch.inference_mode():
-        hs = smoke_lm.model(input_ids=torch.tensor([ids]), output_hidden_states=True).hidden_states
-    assert np.allclose(acts[0, 2], hs[12][0, last].numpy().astype(np.float16), atol=1e-2)
+        hs = smoke_lm.model(input_ids=torch.tensor([ids], device=smoke_lm.device), output_hidden_states=True).hidden_states
+    assert np.allclose(acts[0, 2], hs[12][0, last].float().cpu().numpy().astype(np.float16), atol=1e-2)
     pdir = run_probe(cfg, smoke_lm.model_id)
     k = np.load(pdir / "K_choice_L12.npy")
     assert k.shape[0] == smoke_lm.model.config.hidden_size and k.shape[1] <= 4

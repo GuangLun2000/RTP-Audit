@@ -72,6 +72,8 @@ def run_format_probe(cfg: Config, model_id: str, n_items: int = 40, prompt_mode:
     modes = df["gen_mode"].value_counts().to_dict()
     res = {"model_id": model_id, "n_items": int(len(df)), "c_free": float(df["c_free"].mean()),
            "article_free": float(df["article_free"].mean()),
+           "noise_mean_abs_diff": float((df["s_target_solo"] - df["s_target"]).abs().mean()),
+           "noise_max_abs_diff": float((df["s_target_solo"] - df["s_target"]).abs().max()),
            "c_forced": float(df["c_forced"].mean()), "name_share_free": float(np.nanmean(df["name_share_free"])),
            "modes": {str(k): int(v) for k, v in modes.items()}, "consistency": cons,
            "prompt_tail_free": free[-160:], "prompt_tail_forced": forced[-160:]}
@@ -82,6 +84,8 @@ def run_format_probe(cfg: Config, model_id: str, n_items: int = 40, prompt_mode:
              f"- mean coverage: free {res['c_free']:.3f}, forced {res['c_forced']:.3f}; name share (free) "
              f"{res['name_share_free']:.3f}; answer modes {res['modes']}; mass of \"A\" + article word removed "
              f"from option A (free) {res['article_free']:.4f}",
+             f"- numerical noise floor: the same items scored batched vs alone differ by {res['noise_mean_abs_diff']:.4f} "
+             f"logits on average (max {res['noise_max_abs_diff']:.4f})",
              f"- free answer vs O5 argmax: {_pct(cons['agreement'])} (chance {_pct(cons['chance'])}); immediate vs "
              f"free argmax {_pct(cons.get('agreement_immediate'))}; deferred vs forced argmax "
              f"{_pct(cons.get('agreement_deferred'))}", "",
@@ -95,8 +99,9 @@ def run_format_probe(cfg: Config, model_id: str, n_items: int = 40, prompt_mode:
                      f"{r.gen_letter or '—'} | {text} |")
     io.atomic_write_text(out / "summary.md", "\n".join(lines) + "\n")
 
-    log.info("format probe %s: c_free %.3f, c_forced %.3f, name share %.3f, modes %s", model_id, res["c_free"],
-             res["c_forced"], res["name_share_free"], res["modes"])
+    log.info("format probe %s: c_free %.3f, c_forced %.3f, name share %.3f, modes %s, batched-vs-alone |ds| mean "
+             "%.4f max %.4f", model_id, res["c_free"], res["c_forced"], res["name_share_free"], res["modes"],
+             res["noise_mean_abs_diff"], res["noise_max_abs_diff"])
     log.info("per evidence level and version:\n%s", by_level.round(3).to_string())
     for r in df.head(12).itertuples(index=False):
         log.info("  e%d %-7s c_free %.2f c_forced %.2f -> free %s / forced %s | %s: %r", r.evidence_level, r.version,

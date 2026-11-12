@@ -118,7 +118,9 @@ Outputs in `runs/<config>/<model_slug>/measure/`:
 
 - `scores.parquet`: `item_id, model_id, p_A..p_D, s_target, gen_letter`, plus `argmax_letter, argmax_free,
   argmax_forced, s_target_free, s_target_forced, s_target_lo, s_target_hi, c_free, c_forced, name_share_*,
-  leak_*, pruned_*, gen_text, gen_mode`.
+  leak_*, article_free, pruned_*, gen_text, gen_mode, s_target_solo`. `s_target_solo` (2% sample) is the same
+  item scored alone: the difference from `s_target` is the numerical noise floor of bfloat16 batching, reported in
+  the summary and `numeric_noise.json` next to the size of the name effects.
 - `pair_scores.parquet`, `name_effects.parquet`.
 - `entity_evidence.parquet`: entity × evidence-level name effects (SEs over placebo substitutes), plus the residual of the
   robust regression through the origin of evidence 4 on evidence 0.
@@ -247,7 +249,8 @@ python -m rtp.cli feedback --config configs/pilot.yaml
   warnings. Test-split results stay hidden unless `--unseal` is passed.
 - `doctor`: GPU, bf16, library pins, whether the HF token is set, disks, Drive, data, and Hub access to the
   configured models.
-- `feedback`: writes `runs/<config>/feedback/feedback_<UTC>.md` for a coding agent (see `docs/AGENT_LOOP.md`).
+- `feedback`: writes `runs/<config>/feedback/feedback_<UTC>.md` for a coding agent (see `docs/AGENT_LOOP.md`),
+  including the head of every finished dev stage's summary.
 
 Every command also appends `start`/`done`/`error` events (errors with tracebacks) and all warnings to
 `runs/<config>/events.jsonl`.

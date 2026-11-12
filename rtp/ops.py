@@ -278,6 +278,18 @@ def _rules(rows, errors) -> list[str]:
     return out
 
 
+SUMMARY_LINES, SUMMARY_CHARS = 90, 7000  # per stage summary in the feedback bundle
+
+
+def _head(path: Path, n: int, max_chars: int) -> str:
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    text = "\n".join(lines[:n])
+    if len(text) > max_chars:
+        text = text[:max_chars]
+    cut = len(lines) > n or len("\n".join(lines[:n])) > max_chars
+    return text + ("\n[... truncated; full file: " + str(path) + "]" if cut else "")
+
+
 def _tail(path: Path, n: int) -> str:
     if not path.exists():
         return ""
@@ -373,6 +385,17 @@ def build_feedback(cfg: Config, tail: int = 60, unseal: bool = False) -> Path:
         res = io.read_json(fp)
         keep = {k: v for k, v in res.items() if not k.startswith("prompt_tail")}
         lines.append(f"- **{res.get('model_id')} / format-probe**: `{json.dumps(keep, default=str)[:900]}`")
+    lines += ["", "## Stage summaries (dev; head of each summary.md)", "",
+              "The first lines of every finished, unsealed stage's summary (gates, warnings, diagnostics); per-entity "
+              "tables are cut. Test-split summaries stay sealed unless --unseal.", ""]
+    for r in rows:
+        p = Path(r["path"]) if r["path"] else None
+        if r.get("sealed") or not p or r["stage"] == "build-data" or not io.is_done(p) or not (p / "summary.md").exists():
+            continue
+        lines += [f"### {r['model']} / {r['stage']}", "", "```", _head(p / "summary.md", SUMMARY_LINES, SUMMARY_CHARS),
+                  "```", ""]
+    for fp in sorted((rdir / "format_probe").glob("*/summary.md")):  # dev only by construction
+        lines += [f"### {fp.parent.name} / format-probe", "", "```", _head(fp, SUMMARY_LINES, SUMMARY_CHARS), "```", ""]
     lines += ["", "## Log tails of failed or partial stages", ""]
     for r in rows:
         if r["path"] and not r.get("sealed") and (r["state"].startswith("partial") or r["state"] == "stale"):

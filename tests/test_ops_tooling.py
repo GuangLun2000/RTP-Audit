@@ -173,10 +173,18 @@ def test_status_and_feedback_seal_test_results(work_dir, tmp_path):
     io.prepare_stage_dir(sdir, "x: 1\n", "h", extra_meta={"model_id": "dummy/model", "stage": "measure",
                                                            "split": "test"})
     io.mark_done(sdir, {"ladder_slope": 0.4242, "responds_to_ratings": False})
+    (sdir / "summary.md").write_text("# sealed summary\nTEST-ONLY-NUMBER 0.7777\n")
+    ddir = stage_dir(cfg.name, "dummy/model", "measure")  # a dev stage: its summary head is in the bundle
+    io.prepare_stage_dir(ddir, "x: 1\n", "h", extra_meta={"model_id": "dummy/model", "stage": "measure", "split": "dev"})
+    io.mark_done(ddir, {"n_items": 1})
+    (ddir / "summary.md").write_text("# dev summary\nDEV-NUMBER 0.1234\n" + "row\n" * 200)
     row = next(r for r in collect_status(cfg) if r["stage"] == "measure_test")
     assert row["warnings"] == ["(sealed: pass --unseal to show)"]
-    assert "0.4242" not in build_feedback(cfg).read_text()
-    assert "0.4242" in build_feedback(cfg, unseal=True).read_text()
+    text = build_feedback(cfg).read_text()
+    assert "0.4242" not in text and "0.7777" not in text
+    assert "DEV-NUMBER 0.1234" in text and "truncated" in text
+    unsealed = build_feedback(cfg, unseal=True).read_text()
+    assert "0.4242" in unsealed and "0.7777" in unsealed
 
 
 def test_error_events_are_redacted_and_resolved_errors_omitted(work_dir, tmp_path, monkeypatch):

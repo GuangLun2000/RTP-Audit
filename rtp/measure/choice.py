@@ -12,7 +12,9 @@ answers immediately, the deferred rest imputed by its committed answer after "An
 (O3) and forced-only (O4) estimators, coverage, name channel, leak and imputation-free bounds are stored
 per item. ``s_target = log(p / (1 - p))`` with ``p`` clipped to [1e-4, 1 - 1e-4].
 
-The spec §7.1 consistency check decodes a fixed 2% sample greedily from the FREE position. Answers that
+The same 2% sample is also re-scored item by item (``s_target_solo``): in bfloat16 a score depends slightly
+on batch composition and padding, and the summary reports that numerical noise floor next to the name
+effects. The spec §7.1 consistency check decodes the sample greedily from the FREE position. Answers that
 name an option within the first few tokens are "immediate"; the others are continued to
 ``DEFERRED_MAX_TOKENS`` and parsed for a concluding answer ("deferred"). Agreement is reported overall
 (against the O5 argmax) and per mode (immediate vs the free argmax, deferred vs the forced argmax, which
@@ -284,8 +286,15 @@ def score_items(lm: LoadedModel, items: Sequence[dict[str, Any]], letter_ids: di
     df = pd.DataFrame(rows)
     for col in ("gen_letter", "gen_text", "gen_mode"):
         df[col] = df[col].astype("object")
+    df["s_target_solo"] = np.nan
     check = [i for i, it in enumerate(items) if it["item_id"] in gen_ids]
     if check:
+        # numerical noise floor: the checked items scored again ALONE (batch of one, no padding). In bfloat16 a
+        # score depends slightly on batch composition and padding; the summary compares that with name effects
+        solo = answer_distributions(lm, [free[i] for i in check], [forced[i] for i in check], [paths[i] for i in check],
+                                    1, m.max_batch_tokens, patches_for)
+        for i, r in zip(check, solo):
+            df.at[i, "s_target_solo"] = estimators(r["free"], r["forced"], LETTERS.index(items[i]["target_label"]))["s_target"]
         # spec 7.1 check: the model's FREE greedy answer (no prefill), mapped to an option by letter or name;
         # answers that begin with prose are continued to find their final answer ("deferred")
         free_check = [free[i] for i in check]
