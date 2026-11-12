@@ -27,6 +27,18 @@ open_ended:
   temperature: 1.0
   max_new_tokens: 16
   all_natural_negatives: true  # also the 16 Appendix A categories without choice items (dev only)
+extract:
+  layer_stride: 2
+  choice_evidence_levels: [0]
+  choice_rotations: [0]
+  shard_size: 2000
+  max_batch_size: 16
+  max_batch_tokens: 32768
+probe:
+  k_rank: 16
+  heldout_categories: ["camera", "electric car"]  # dev categories used only to test probes
+  cv_folds: 5
+  k_frame: choice
 models:
   - allenai/Llama-3.1-Tulu-3-8B-SFT
   - allenai/Llama-3.1-Tulu-3-8B-DPO

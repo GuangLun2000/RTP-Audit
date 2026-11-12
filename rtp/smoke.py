@@ -1,7 +1,8 @@
 """``python -m rtp.cli smoke``: small end-to-end run on the smoke model.
 
 Steps: M0 load + one forward pass -> M1 build data -> seal check -> M2 measure ->
-M2 open-ended -> report. Starts from a clean ``runs/<config name>/`` unless ``--resume``.
+M2 open-ended -> M3 extract -> M3 probe -> report. Starts from a clean ``runs/<config name>/``
+unless ``--resume``.
 """
 
 from __future__ import annotations
@@ -71,9 +72,11 @@ def check_data(cfg, ddir) -> None:
     log.info("data OK: test split sealed, regeneration byte-identical")
 
 
-def run_smoke(config_path: str = "configs/smoke.yaml", resume: bool = False) -> int:
+def run_smoke(config_path: str = "configs/smoke.yaml", resume: bool = False, overrides: list[str] | None = None) -> int:
+    from rtp.config import apply_overrides
+
     t_start = time.time()
-    cfg = load_config(config_path)
+    cfg = apply_overrides(load_config(config_path), overrides)
     model_id = registry.SMOKE_MODEL
     hw = hardware_summary()
     log.info("smoke: config=%s model=%s hardware=%s", cfg.name, model_id, hw)
@@ -85,7 +88,8 @@ def run_smoke(config_path: str = "configs/smoke.yaml", resume: bool = False) -> 
             f"refusing to use {rdir}: it was not created by `smoke` (no {SMOKE_MARKER} marker) and may hold real "
             f"results. Use a config with another name (e.g. configs/smoke.yaml) or remove the directory yourself.")
     if not resume and rdir.exists():
-        foreign = [d.name for d in rdir.iterdir() if d.is_dir() and d.name not in ("data", model_slug(model_id))]
+        # a model results dir is one that holds stage dirs (stage_meta.json); data/, feedback/ etc. are not
+        foreign = sorted({m.parent.parent.name for m in rdir.glob("*/*/stage_meta.json")} - {model_slug(model_id)})
         if rdir.resolve().parent != (work_dir() / "runs").resolve() or foreign:
             raise SmokeFailure(f"refusing to delete {rdir}: unexpected location or results of other models {foreign}")
         log.info("smoke: removing previous smoke outputs in %s", rdir)
@@ -123,8 +127,15 @@ def run_smoke(config_path: str = "configs/smoke.yaml", resume: bool = False) -> 
 
     mdir = step("measure", lambda: run_measure(cfg, model_id, split="dev"))
     odir = step("open-ended", lambda: run_open_ended(cfg, model_id, split="dev"))
+
+    # ---- M3
+    from rtp.detect.activations import run_extract
+    from rtp.detect.probes import run_probe
+
+    edir = step("extract", lambda: run_extract(cfg, model_id, split="dev"))
+    pdir = step("probe", lambda: run_probe(cfg, model_id))
     rpath = step("report", lambda: run_report(cfg))
-    for d in (ddir, mdir, odir):
+    for d in (ddir, mdir, odir, edir, pdir):
         if not io.is_done(d) or not (d / "summary.md").exists():
             raise SmokeFailure(f"stage dir {d} lacks _DONE or summary.md")
     info = io.read_json(mdir / io.DONE_FILE)

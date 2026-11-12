@@ -28,7 +28,8 @@ OPTION_FIELDS = {"label": str, "name": str, "role": str, "is_placebo": bool, "de
                  "price": (*_NUM, type(None)), "features": (list, type(None)), "rating": (*_NUM, type(None)),
                  "n_reviews": (int, type(None)), "lab_note": (str, type(None))}
 PROBE_FIELDS = {"probe_id": str, "split": str, "category": str, "entity": str, "attributes": dict,
-                "template_id": int, "text": str, "name_char_span": list}
+                "template_id": int, "frame": str, "control": (str, type(None)), "other_entity": (str, type(None)),
+                "other_attributes": (dict, type(None)), "text": str, "name_char_span": list}
 ROLE_COUNTS = {"target": 1, "competitor": 2, "placebo_distractor": 1}
 
 
@@ -141,7 +142,16 @@ def validate_probe_items(items: list[dict[str, Any]]) -> int:
         s, t = it["name_char_span"]
         if it["text"][s:t] != it["entity"] or it["text"].rfind(it["entity"]) != s:
             raise SchemaError(f"{where}: name_char_span does not point at the last mention of the entity")
-        prev = by_entity.setdefault((it["category"], it["entity"]), attrs)
-        if prev != attrs:
-            raise SchemaError(f"{where}: entity {it['entity']} has inconsistent attributes")
+        if it["frame"] not in ("background", "choice") or it["control"] not in (None, "two_brand", "undescribed"):
+            raise SchemaError(f"{where}: bad frame/control {it['frame']}/{it['control']}")
+        if (it["control"] is None) != (it["other_entity"] is None):
+            raise SchemaError(f"{where}: other_entity must be set exactly for control items")
+        if it["control"] == "undescribed" and it["text"].count(it["entity"]) != 1:
+            raise SchemaError(f"{where}: an undescribed read entity must appear exactly once")
+        for ent, a in ((it["entity"], attrs), (it["other_entity"], it["other_attributes"])):
+            if ent is None:
+                continue
+            prev = by_entity.setdefault((it["category"], ent), a)
+            if prev != a:
+                raise SchemaError(f"{where}: entity {ent} has inconsistent attributes")
     return len(items)

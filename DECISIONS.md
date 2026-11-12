@@ -95,3 +95,38 @@ One line per decision: what was chosen, and why (simplest option unless noted).
   - a manipulation check: OLS of s_target on rating gap, log price ratio and log review ratio, per name version, with a warning when the rating coefficient is not > 2 SE in both versions;
   - letter and name mass by evidence level.
   On the smoke model the check correctly flags that 0.5B barely uses the ratings (coef +0.13 ± 0.07).
+
+## M3 activations, probes, K (designed around the review's findings, 2026-11-12)
+- M3 has to answer three empirical questions before M4 relies on K, so it reports them instead of assuming them:
+  - does K transfer to the choice-prompt name position;
+  - do the probes read the entity rather than the context (binding);
+  - is familiarity inside K.
+  The smoke-scale review evidence for all three was negative on 0.5B.
+- Spec extension: `choice` frame probes put the spec background before the evidence-0 choice prompt (the probe entity plus 3 real brands of the category) and read at the entity's option line. That is where M4 transplants, and in a causal LM the representation there depends only on what precedes it. The spec `background` frame is kept, and both frames are trained and exported. `probe.k_frame` (default `choice`) names the main K.
+- Binding controls are evaluation-only items, per entity:
+  - `two_brand`: the background describes X and then Y, and X is read. Accuracy should follow X's labels.
+  - `undescribed`: the background describes X, and an undescribed probe name Z is read. Accuracy should be at chance for Z.
+  Both are evaluated on held-out categories only, so the entities are unseen.
+- `entity`/`attributes` in probe items always refer to the READ entity; `other_entity`/`other_attributes` to the other one. Choice-frame options use the run's real brands, never choice placebos, so the probe and choice placebo pools stay disjoint.
+- Extraction reads `output_hidden_states` (hooks are reserved for M4).
+  - Layers are hidden-state indices 0 (embeddings), stride, 2·stride, …, always including the last block.
+  - Names are located by finding the user text inside the rendered chat prompt and mapping the char span through `return_offsets_mapping` (fast tokenizers only; anything else raises).
+  - Choice items are rendered with the "Answer:" prefill exactly as measured. Only evidence 0 at rotation 0 is extracted by default (about 0.85 GB for the 8B pilot), because M4 recomputes activations itself.
+- Probes are ridge classifiers on standardised activations (spec: ridge or logistic). One thin SVD per training set serves every attribute, alpha and the control task, which keeps the pilot to minutes.
+  - Alpha is chosen by entity-grouped CV on the non-held-out dev categories; held-out dev categories (`probe.heldout_categories`, pilot: camera, electric car) measure generalisation.
+  - The control task permutes whole attribute vectors across entities and uses the same CV.
+- K = QR of [level-mean PCs of every attribute, THEN the ridge weight directions mapped to activation space (w/σ)], truncated to `k_rank`. The order matters. PCs are where attribute information is encoded, which is what a transplant moves; ridge weights are discriminative read-out directions. With weights first, the synthetic recovery test found a 5% loss of an encoded contrast. K is exported for every extracted layer; M4 selects the layer (spec §7.6 selects by full-transplant recovery).
+- The readiness warnings use fixed constants: selectivity < 0.05, binding gap < 0.05, K capture < 2× random, no significant positive tier transfer, popularity AUC < 0.6. They are statements for the PI, not gates. The probe stage never stops on them.
+- Real-brand transfer uses the catalogue tier (budget/mid/premium → price_tier 0/1/2) as the only real-brand label available without human annotation. Familiarity is read from the popularity probe (real vs placebo AUC, and Spearman with the measured ne_e0 when the measure stage exists).
+
+## Colab operations and the improvement loop (PI request, 2026-11-12)
+- The notebook goes beyond the spec §13 cells (PI request). All §13 commands are still there, and it adds:
+  - doctor preflight, GPU batch overrides, smoke + pytest with `RTP_REQUIRE_INTEGRATION=1`;
+  - per-model measure/open-ended/extract/probe/status that continues after a failure;
+  - report and probe summaries, and a feedback bundle.
+- Live output: `rtp.notebook` streams subprocess output line by line and marks warnings and errors. `RTP_PROGRESS=log`, the default outside a terminal, writes one progress line per ~10% with ETA instead of carriage-return bars, because those garble captured output.
+- `runs/<config>/events.jsonl` records start/done/error for every CLI call with exit code, elapsed time and traceback, plus every WARNING+ log record (secret-redacted) and finished shards.
+  - `status` computes done/partial/stale/not started by recomputing each stage's identity.
+  - `feedback` assembles environment, status, rule-based next actions, errors, deduplicated warnings, key results, log tails and the last pytest output.
+- `--set SECTION.KEY=VALUE` overrides config values without editing files. Batch limits are excluded from every stage identity, so GPU-specific batch sizes never force a recompute.
+- `progress`/`events` count as plumbing in the code digest (they cannot change results). Logic lives in the package, not in notebook cells, so it is versioned and tested with the code.

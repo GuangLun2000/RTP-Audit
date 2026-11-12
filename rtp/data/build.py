@@ -65,7 +65,8 @@ def generate(cfg: Config) -> dict[str, Any]:
     catalogue = catalogue_records(cats, seeds, nn, choice_pool, d.n_real_per_category, d.n_placebo_per_category,
                                   d.test_categories)
     items = build_choice_items(cfg, seeds, catalogue)
-    probes = build_probe_items(cfg, cats, probe_pool)
+    reals = {c: [r["entity"] for r in catalogue if r["category"] == c and not r["is_placebo"]] for c in cats}
+    probes = build_probe_items(cfg, cats, probe_pool, reals)
     schema.validate_catalogue(catalogue)
     schema.validate_choice_items(items)
     schema.validate_probe_items(probes)

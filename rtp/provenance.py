@@ -20,7 +20,8 @@ from typing import Any
 
 PKG_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = PKG_ROOT.parent
-PLUMBING = frozenset({"rtp.config", "rtp.io", "rtp.paths", "rtp.log", "rtp.provenance", "rtp"})
+PLUMBING = frozenset({"rtp.config", "rtp.io", "rtp.paths", "rtp.log", "rtp.provenance", "rtp.progress",
+                      "rtp.events", "rtp"})
 
 
 def _module_file(name: str) -> Path | None:

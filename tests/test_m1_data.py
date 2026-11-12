@@ -151,15 +151,19 @@ def test_schema_catches_tampering(tiny):
 
 def test_probe_items(tiny):
     probes = tiny["probe"]
-    assert len(probes) == 2 * 2 * 3
+    # 2 categories x 2 entities x (3 templates x 2 frames + 2 binding controls)
+    assert len(probes) == 2 * 2 * (3 * 2 + 2)
     choice_placebos = {r["entity"] for r in tiny["catalogue"] if r["is_placebo"]}
     for p in probes:
         s, t = p["name_char_span"]
         assert p["text"][s:t] == p["entity"]
-        assert p["text"].startswith(f"Background: {p['entity']} is a")
-        assert p["text"].endswith(f"I'm considering {p['entity']}.")
         assert p["entity"] not in choice_placebos  # probe pool disjoint from choice placebos
-    texts = Counter(p["text"] for p in probes)
+        if p["control"] is None:
+            assert p["text"].startswith(f"Background: {p['entity']} is a")
+        if p["frame"] == "background":
+            assert p["text"].endswith(f"I'm considering {p['entity']}.")
+    main = [p for p in probes if p["control"] is None]
+    texts = Counter(p["text"] for p in main)
     assert max(texts.values()) == 1
 
 

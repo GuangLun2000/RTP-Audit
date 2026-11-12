@@ -1,14 +1,29 @@
-"""Probe items on placebo brands only (spec §7.5).
+"""Probe items on placebo brands only (spec §7.5), in two frames, plus binding controls (M3).
 
 Each probe entity gets one random attribute vector (labels are known because we assign
-them). The vector is expressed in ``probe_templates`` different phrasings. Text shape:
+them). The vector is expressed in ``probe_templates`` different phrasings.
 
-    Background: {name} is a {category} brand. {attribute sentences}   ('coffee brand' -> 'a coffee brand')
+* ``frame="background"`` (spec §7.5)::
 
-    I'm considering {name}.
+      Background: {name} is a {category} brand. {attribute sentences}
 
-``name_char_span`` is the character span of the LAST mention of the name, whose final
-token is where M3 reads activations.
+      I'm considering {name}.
+
+* ``frame="choice"``: the same background, then the evidence-0 choice prompt with {name}
+  as one of four options (three real brands of the category). Activations are read at
+  {name} in its option line, the position where M4 transplants. In a causal LM the
+  representation there depends only on what precedes it, so this frame trains K in the
+  context it will be applied in.
+* Binding controls (evaluation only; background frame, ``template_id`` = entity index mod
+  templates):
+    - ``control="two_brand"``: the background describes X and then another probe entity Y;
+      the text ends "I'm considering X." A probe that reads X should match X's labels, not Y's.
+    - ``control="undescribed"``: the background describes X but the text ends "I'm considering
+      Z." for an undescribed probe entity Z. Accuracy against Z's labels should be at chance.
+
+``entity`` / ``attributes`` always refer to the entity whose name is READ, and
+``other_entity`` / ``other_attributes`` to the other entity in the text (if any).
+``name_char_span`` is the span of the read mention (the last mention of ``entity``).
 """
 
 from __future__ import annotations
@@ -17,6 +32,7 @@ from typing import Any
 
 from rtp.config import Config
 from rtp.data.catalogue import brand_phrase, indefinite_article
+from rtp.data.choice_items import LETTERS, PROMPT_TEMPLATE
 from rtp.data.splits import split_of
 from rtp.rng import rng_for
 
@@ -92,35 +108,92 @@ def attribute_sentence(attr: str, level: int, phrasing: int) -> str:
     raise KeyError(attr)
 
 
-def render_probe(name: str, category: str, attributes: dict[str, int], phrasing: int) -> tuple[str, list[int]]:
+def background(name: str, category: str, attributes: dict[str, int], phrasing: int) -> str:
     shift = phrasing % len(ATTRIBUTES)
     order = ATTRIBUTES[shift:] + ATTRIBUTES[:shift]
     sentences = " ".join(attribute_sentence(a, attributes[a], phrasing) for a in order)
     phrase = brand_phrase(category)
-    text = (f"Background: {name} is {indefinite_article(phrase)} {phrase}. {sentences}\n\n"
-            f"I'm considering {name}.")
+    return f"{name} is {indefinite_article(phrase)} {phrase}. {sentences}"
+
+
+def render_probe(name: str, category: str, attributes: dict[str, int], phrasing: int) -> tuple[str, list[int]]:
+    """Background frame (spec §7.5)."""
+    text = f"Background: {background(name, category, attributes, phrasing)}\n\nI'm considering {name}."
     start = text.rindex(name)
     return text, [start, start + len(name)]
 
 
-def build_probe_items(cfg: Config, categories: list[str], probe_names: dict[str, list[str]]) -> list[dict[str, Any]]:
+def render_choice_probe(name: str, category: str, attributes: dict[str, int], phrasing: int,
+                        others: list[str], position: int) -> tuple[str, list[int]]:
+    """Choice frame: background, then the evidence-0 choice prompt with ``name`` at option ``position``."""
+    names = list(others[:position]) + [name] + list(others[position:])
+    lines = "\n".join(f"{LETTERS[i]}. {n}" for i, n in enumerate(names))
+    choice = PROMPT_TEMPLATE.format(article=indefinite_article(category), category=category, lines=lines)
+    text = f"Background: {background(name, category, attributes, phrasing)}\n\n{choice}"
+    start = text.index(f"\n{LETTERS[position]}. {name}\n") + len(f"\n{LETTERS[position]}. ")
+    return text, [start, start + len(name)]
+
+
+def render_two_brand(x: str, y: str, category: str, ax: dict[str, int], ay: dict[str, int],
+                     phrasing: int) -> tuple[str, list[int]]:
+    text = (f"Background: {background(x, category, ax, phrasing)} {background(y, category, ay, phrasing)}\n\n"
+            f"I'm considering {x}.")
+    start = text.rindex(x)
+    return text, [start, start + len(x)]
+
+
+def render_undescribed(x: str, z: str, category: str, ax: dict[str, int], phrasing: int) -> tuple[str, list[int]]:
+    text = f"Background: {background(x, category, ax, phrasing)}\n\nI'm considering {z}."
+    start = text.rindex(z)
+    return text, [start, start + len(z)]
+
+
+def build_probe_items(cfg: Config, categories: list[str], probe_names: dict[str, list[str]],
+                      real_brands: dict[str, list[str]] | None = None) -> list[dict[str, Any]]:
+    """``real_brands``: per category, the run's selected real brands (options of the choice frame)."""
     d = cfg.data
     if d.probe_templates > N_PHRASINGS:
         raise ValueError(f"probe_templates={d.probe_templates} exceeds the {N_PHRASINGS} available phrasings")
-    items = []
+    items: list[dict[str, Any]] = []
     counter = 0
+
+    def add(category, split, entity, attrs, t, frame, text, span, control=None, other=None, other_attrs=None):
+        nonlocal counter
+        counter += 1
+        items.append({"probe_id": f"p-{counter:06d}", "split": split, "category": category, "entity": entity,
+                      "attributes": dict(attrs), "template_id": t, "frame": frame, "control": control,
+                      "other_entity": other, "other_attributes": dict(other_attrs) if other_attrs else None,
+                      "text": text, "name_char_span": span})
+
     for category in categories:
         pool = probe_names.get(category, [])
-        if len(pool) < d.probe_entities_per_category:
-            raise ValueError(f"category '{category}': needs {d.probe_entities_per_category} probe placebos, "
-                             f"placebo file has {len(pool)}")
+        n = d.probe_entities_per_category
+        if len(pool) < n:
+            raise ValueError(f"category '{category}': needs {n} probe placebos, placebo file has {len(pool)}")
         rng = rng_for(cfg.seed, "probe", category)
         split = split_of(category, d.test_categories)
-        for name in pool[: d.probe_entities_per_category]:
-            attrs = {a: int(rng.integers(N_LEVELS[a])) for a in ATTRIBUTES}
+        names = pool[:n]
+        attrs = {nm: {a: int(rng.integers(N_LEVELS[a])) for a in ATTRIBUTES} for nm in names}
+        reals = list((real_brands or {}).get(category, []))
+        if "choice" in d.probe_frames and len(reals) < 3:
+            raise ValueError(f"category '{category}': the choice frame needs >= 3 real brands, got {reals}")
+        frame_rng = rng_for(cfg.seed, "probe-choice-frame", category)
+        for i, nm in enumerate(names):
             for t in range(d.probe_templates):
-                counter += 1
-                text, span = render_probe(name, category, attrs, t)
-                items.append({"probe_id": f"p-{counter:06d}", "split": split, "category": category, "entity": name,
-                              "attributes": dict(attrs), "template_id": t, "text": text, "name_char_span": span})
+                for frame in d.probe_frames:
+                    if frame == "background":
+                        text, span = render_probe(nm, category, attrs[nm], t)
+                    else:
+                        others = [reals[int(j)] for j in frame_rng.choice(len(reals), size=3, replace=False)]
+                        position = int(frame_rng.integers(4))
+                        text, span = render_choice_probe(nm, category, attrs[nm], t, others, position)
+                    add(category, split, nm, attrs[nm], t, frame, text, span)
+            if d.probe_controls and n >= 2:
+                t = i % d.probe_templates
+                y = names[(i + 1) % n]
+                text, span = render_two_brand(nm, y, category, attrs[nm], attrs[y], t)
+                add(category, split, nm, attrs[nm], t, "background", text, span, "two_brand", y, attrs[y])
+                z = names[(i + 2) % n] if n >= 3 else y
+                text, span = render_undescribed(nm, z, category, attrs[nm], t)
+                add(category, split, z, attrs[z], t, "background", text, span, "undescribed", nm, attrs[nm])
     return items

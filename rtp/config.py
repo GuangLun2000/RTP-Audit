@@ -23,6 +23,7 @@ EVIDENCE_LEVELS = (0, 1, 2, 3, 4)
 HANDICAPS = (0, 1, 2, 3, 4)
 HANDICAP_MIN_EVIDENCE = 3  # spec 7.1: handicap only applies when ratings are shown (evidence >= 3)
 OPEN_ENDED_PROMPT_TYPES = ("name", "choose", "recommend", "pick")
+PROBE_FRAMES = ("background", "choice")
 
 
 class ConfigError(ValueError):
@@ -47,6 +48,11 @@ class DataConfig:
     test_categories: list[str] = field(default_factory=list)
     probe_entities_per_category: int = 30
     probe_templates: int = 10
+    # M3: "background" = spec §7.5 text ("Background: ... I'm considering X."); "choice" = the same background
+    # followed by the evidence-0 choice prompt with X as an option, read at X's option line (where M4 transplants)
+    probe_frames: list[str] = field(default_factory=lambda: list(PROBE_FRAMES))
+    # M3 binding controls: per entity one two-brand item and one undescribed-name item (evaluation only)
+    probe_controls: bool = True
 
 
 @dataclass
@@ -71,12 +77,36 @@ class OpenEndedConfig:
 
 
 @dataclass
+class ExtractConfig:
+    """M3 activation extraction (spec §7.4)."""
+    layer_stride: int = 2  # hidden-state layers 0 (embeddings), stride, 2*stride, ... up to the last block
+    choice_evidence_levels: list[int] = field(default_factory=lambda: [0])  # where M4 computes the residual
+    choice_rotations: list[int] = field(default_factory=lambda: [0])  # M4 recomputes activations itself
+    shard_size: int = 2000
+    max_batch_size: int = 32
+    max_batch_tokens: int = 32768
+
+
+@dataclass
+class ProbeConfig:
+    """M3 probes and knowledge subspace K (spec §7.5)."""
+    k_rank: int = 16
+    heldout_categories: list[str] = field(default_factory=list)  # dev categories used only to TEST probes
+    cv_folds: int = 5
+    alphas: list[float] = field(default_factory=lambda: [1.0, 10.0, 100.0, 1000.0, 10000.0])
+    k_frame: str = "choice"  # frame whose probes define the main K (both frames are exported)
+    n_random_subspaces: int = 20
+
+
+@dataclass
 class Config:
     name: str
     seed: int = 0
     data: DataConfig = field(default_factory=DataConfig)
     measure: MeasureConfig = field(default_factory=MeasureConfig)
     open_ended: OpenEndedConfig = field(default_factory=OpenEndedConfig)
+    extract: ExtractConfig = field(default_factory=ExtractConfig)
+    probe: ProbeConfig = field(default_factory=ProbeConfig)
     models: list[str] = field(default_factory=list)
     source_path: str | None = None  # not part of the hash
 
@@ -120,7 +150,8 @@ class Config:
         editing probe placebos does not invalidate behavioural stages whose inputs are unchanged.
         Use ``rtp.stages.stage_hash`` to get the right ``inputs``/``code`` for a stage.
         """
-        section = dataclasses.asdict({"measure": self.measure, "open_ended": self.open_ended}[stage])
+        section = dataclasses.asdict({"measure": self.measure, "open_ended": self.open_ended,
+                                      "extract": self.extract, "probe": self.probe}[stage])
         for k in ("max_batch_size", "max_batch_tokens"):  # batch limits only reorder work; allow resuming after OOM
             section.pop(k, None)
         if stage == "open_ended":
@@ -183,7 +214,7 @@ def _build(cls, raw: dict[str, Any] | None, where: str):
 def config_from_dict(raw: dict[str, Any], source_path: str | None = None) -> Config:
     if not isinstance(raw, dict):
         raise ConfigError("config root must be a mapping")
-    allowed = {"name", "seed", "data", "measure", "open_ended", "models"}
+    allowed = {"name", "seed", "data", "measure", "open_ended", "extract", "probe", "models"}
     unknown = sorted(set(raw) - allowed)
     if unknown:
         raise ConfigError(f"unknown top-level key(s): {unknown}; allowed: {sorted(allowed)}")
@@ -195,11 +226,34 @@ def config_from_dict(raw: dict[str, Any], source_path: str | None = None) -> Con
         data=_build(DataConfig, raw.get("data"), "data"),
         measure=_build(MeasureConfig, raw.get("measure"), "measure"),
         open_ended=_build(OpenEndedConfig, raw.get("open_ended"), "open_ended"),
+        extract=_build(ExtractConfig, raw.get("extract"), "extract"),
+        probe=_build(ProbeConfig, raw.get("probe"), "probe"),
         models=list(raw.get("models") or []),
         source_path=source_path,
     )
     validate(cfg)
     return cfg
+
+
+def apply_overrides(cfg: Config, sets: list[str] | None) -> Config:
+    """Apply ``section.key=value`` overrides (value parsed as YAML) and re-validate."""
+    if not sets:
+        return cfg
+    raw = cfg.to_dict()
+    for item in sets:
+        if "=" not in item:
+            raise ConfigError(f"--set expects SECTION.KEY=VALUE, got '{item}'")
+        key, value = item.split("=", 1)
+        parts = key.strip().split(".")
+        node = raw
+        for part in parts[:-1]:
+            if part not in node or not isinstance(node[part], dict):
+                raise ConfigError(f"--set: unknown section '{part}' in '{key}'")
+            node = node[part]
+        if parts[-1] not in node:
+            raise ConfigError(f"--set: unknown key '{key}'")
+        node[parts[-1]] = yaml.safe_load(value)
+    return config_from_dict(raw, source_path=cfg.source_path)
 
 
 def load_config(path: str | Path) -> Config:
@@ -255,3 +309,20 @@ def validate(cfg: Config) -> None:
          f"open_ended.prompt_types must be a non-empty subset of {list(OPEN_ENDED_PROMPT_TYPES)}")
     need(o.n_samples >= 1 and o.max_new_tokens >= 1 and o.temperature > 0, "bad open_ended sampling settings")
     need(all(isinstance(x, str) and x for x in cfg.models), "models must be a list of non-empty strings")
+    need(len(d.probe_frames) > 0 and set(d.probe_frames) <= set(PROBE_FRAMES),
+         f"data.probe_frames must be a non-empty subset of {list(PROBE_FRAMES)}")
+    x = cfg.extract
+    need(x.layer_stride >= 1 and x.shard_size >= 1 and x.max_batch_size >= 1 and x.max_batch_tokens >= 1,
+         "extract sizes must be >= 1")
+    need(len(x.choice_evidence_levels) > 0 and set(x.choice_evidence_levels) <= set(EVIDENCE_LEVELS),
+         f"extract.choice_evidence_levels must be a non-empty subset of {list(EVIDENCE_LEVELS)}")
+    need(len(x.choice_rotations) > 0 and set(x.choice_rotations) <= {0, 1, 2, 3}, "extract.choice_rotations in 0-3")
+    pr = cfg.probe
+    need(pr.k_rank >= 1 and pr.cv_folds >= 2 and pr.n_random_subspaces >= 1, "bad probe sizes")
+    need(len(pr.alphas) > 0 and all(a > 0 for a in pr.alphas), "probe.alphas must be positive")
+    need(pr.k_frame in d.probe_frames, "probe.k_frame must be one of data.probe_frames")
+    if d.categories is not None:
+        bad = [c for c in pr.heldout_categories if c not in d.categories or c in d.test_categories]
+        need(not bad, f"probe.heldout_categories must be dev categories of the run: {bad}")
+        need(len(set(d.categories) - set(d.test_categories) - set(pr.heldout_categories)) >= 1,
+             "probes need at least one dev category that is not held out")

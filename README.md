@@ -4,8 +4,10 @@ Research code for auditing brand preferences in open-weight LLMs. Given a single
 no clean base model, it asks whether the model's preference for a brand includes *undisclosed promotion*:
 preference attached to the brand's identity rather than to what the model knows about the brand.
 
-Status: **M0 (infrastructure)**, **M1 (data generation)** and **M2 (behavioural measurement)** are implemented. M3+
-(activations, probes, transplant, residuals, planting, evaluation) are not implemented yet. See `DECISIONS.md` for design choices not fixed by the spec.
+Status: **M0 (infrastructure)**, **M1 (data generation)**, **M2 (behavioural measurement)** and **M3 (activations,
+probes, knowledge subspace K, M4-readiness diagnostics)** are implemented. M4+ (transplant, identity residuals,
+planting, evaluation) are not implemented yet. See `DECISIONS.md` for design choices not fixed by the spec, and
+`docs/AGENT_LOOP.md` for the Colab → feedback bundle → coding agent improvement loop.
 
 ## Install
 
@@ -154,6 +156,65 @@ Collects every finished `measure` / `open-ended` stage of the config into `runs/
 prints it. The report covers consistency rates, per-entity name effects at evidence 0 and 4 for each model, and
 the Named and Picked shares across checkpoints. Pass `--unseal` to include test-split stages.
 
+### `extract` (M3)
+
+```bash
+python -m rtp.cli extract --config configs/pilot.yaml --model allenai/Llama-3.1-Tulu-3-8B-SFT
+```
+
+Extracts float16 activations `[n_items, n_layers, d_model]` with `output_hidden_states=True` at every
+`extract.layer_stride`-th hidden-state layer (the last one is always included). Prompts are rendered exactly as
+they are measured. The extracted positions:
+
+- probe items: the last token of the read brand-name mention;
+- evidence-0 choice items (rotation 0 by default): the last token of the target name, and the last input token.
+
+The expected size is logged before writing. For the pilot on an 8B model it is about 1.6 GB, of which choice items
+are about 0.85 GB.
+
+### `probe` (M3, dev split only)
+
+```bash
+python -m rtp.cli probe --config configs/pilot.yaml --model allenai/Llama-3.1-Tulu-3-8B-SFT
+```
+
+Trains ridge probes for each frame (`background` = spec text; `choice` = the background followed by the choice
+prompt, read at the option line), each layer and each attribute, and evaluates them in four ways:
+
+- grouped CV by entity;
+- the control task (labels permuted across entities);
+- held-out dev categories (`probe.heldout_categories`), within the same frame and across frames;
+- binding controls: two-brand texts and undescribed names.
+
+It exports `K_{frame}_L{layer}.npy` for every layer: QR of the level-mean PCs followed by the probe weights, at
+rank ≤ `k_rank`.
+
+`summary.md` starts with **Readiness for M4**. It warns when probes do not beat the control task, binding is not
+shown, K captures no more of the real-minus-placebo activation difference than a random subspace, placebo-trained
+probes do not transfer to real brands' catalogue tier, or the popularity probe does not separate real brands from
+placebos (familiarity).
+
+### `status`, `doctor`, `feedback` (operations)
+
+```bash
+python -m rtp.cli status --config configs/pilot.yaml
+python -m rtp.cli doctor --config configs/pilot.yaml
+python -m rtp.cli feedback --config configs/pilot.yaml
+```
+
+- `status`: every stage of every model, shown as done / partial / stale / not started, with its warnings.
+- `doctor`: GPU, bf16, library pins, whether the HF token is set, disks, Drive, data, and Hub access to the
+  configured models.
+- `feedback`: writes `runs/<config>/feedback/feedback_<UTC>.md` for a coding agent (see `docs/AGENT_LOOP.md`).
+
+Every command also appends `start`/`done`/`error` events (errors with tracebacks) and all warnings to
+`runs/<config>/events.jsonl`.
+
+`--set SECTION.KEY=VALUE` (repeatable, before the stage name) overrides a config value, for example
+`python -m rtp.cli --set measure.max_batch_size=128 measure ...`.
+
+Progress is reported as one log line per ~10% with ETA; `RTP_PROGRESS=tqdm` gives bars in a terminal.
+
 ### Resuming
 
 Long stages write `shard_XXXXX.parquet` plus a `.done` marker every `shard_size` prompts and end with `_DONE` and
@@ -176,14 +237,19 @@ error (the message says which).
 
 ## Colab
 
-`colab/run_pilot.ipynb` mirrors spec §13:
+`colab/run_pilot.ipynb` contains the spec §13 steps:
 
-1. Mount Drive and set `RTP_WORK_DIR`, `HF_HOME` and `HF_TOKEN` (from Secrets).
-2. Clone and install.
-3. Run smoke and the tests.
-4. `build-data`.
-5. `measure` and `open-ended` for each model (re-run the cell to resume).
-6. `report`.
+1. Mount Drive and set the environment.
+2. Clone and install. `PIN_COMMIT` optionally pins the code; the notebook checks that torch is unchanged.
+3. `doctor` preflight, plus batch sizes chosen for the GPU (H200 or 96 GB).
+4. Smoke and the tests.
+5. `build-data`.
+6. `measure`, `open-ended`, `extract`, `probe` and `status` for each model. Re-run this cell to resume.
+7. `report`, plus the probe readiness summaries.
+8. **Feedback bundle** for the coding agent.
+
+Stages run through `rtp.notebook`, which streams live output, marks warnings and errors, keeps going when one model
+fails, and keeps a session history.
 
 ## Tests
 
@@ -198,7 +264,11 @@ Unit tests use synthetic data and run on CPU. They cover:
 - pairing strictly within `pair_id`;
 - robust regression with an outlier;
 - brand matching and pick aggregation;
-- determinism (file hashes), schema and design invariants, the sealed split, and placebo conflicts.
+- determinism (file hashes), schema and design invariants, the sealed split, and placebo conflicts;
+- M3: ridge probes against sklearn, grouped CV, the control task, recovery of an embedded attribute subspace by K
+  (spec §10), the capture ratio, and token location;
+- the operations tooling: status, feedback bundles (including secret redaction), events, overrides, and the
+  notebook helpers.
 
 Tests marked `integration` load the real smoke model and are skipped only when it cannot be loaded (no network
 and no cache). Any other error fails. Set `RTP_REQUIRE_INTEGRATION=1` to turn those skips into failures. To run

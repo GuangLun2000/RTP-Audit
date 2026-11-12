@@ -18,25 +18,40 @@ from rtp.provenance import RESUME_CRITICAL, code_digest, environment
 
 log = logging.getLogger(__name__)
 
-STAGE_MODULES = {"measure": "rtp.measure.choice", "open_ended": "rtp.measure.open_ended"}
+STAGE_MODULES = {"measure": "rtp.measure.choice", "open_ended": "rtp.measure.open_ended",
+                 "extract": "rtp.detect.activations", "probe": "rtp.detect.probes"}
 
 
-def stage_inputs_digest(cfg: Config, kind: str, split: str) -> str:
-    """Digest of the data files a stage reads, from the data manifest (requires built data)."""
-    from rtp.data.build import CATALOGUE, CHOICE, SEED_SNAPSHOT_DIR, require_built
+def stage_inputs_digest(cfg: Config, kind: str, split: str, model_id: str | None = None) -> str:
+    """Digest of what a stage reads: data files from the manifest (requires built data); for the probe stage
+    also the identity of the extract stage whose activations it consumes."""
+    from rtp.data.build import CATALOGUE, CHOICE, PROBE, require_built
 
     manifest = io.read_json(require_built(cfg) / "data_manifest.json")
     sha = manifest["sha256"]
     if kind == "measure":
         parts = [sha[f"{split}/{CHOICE}"], sha[CATALOGUE]]
-    else:  # open-ended reads the catalogue and the seed snapshot (brands, aliases, Appendix A)
+    elif kind == "open_ended":  # the catalogue and the seed snapshot (brands, aliases, Appendix A)
         snap = manifest["seed_snapshot_sha256"]
         parts = [sha[CATALOGUE]] + [snap[k] for k in sorted(snap)]
+    elif kind == "extract":
+        parts = [sha[f"{split}/{PROBE}"], sha[f"{split}/{CHOICE}"], sha[CATALOGUE]]
+    elif kind == "probe":
+        from rtp.detect.activations import extract_stage_name
+        from rtp.paths import stage_dir
+
+        edir = stage_dir(cfg.name, model_id, extract_stage_name(split))
+        if not io.is_done(edir):
+            raise io.StageConfigMismatch(f"probe needs a finished extract stage at {edir}; run `extract` first")
+        parts = [io.stored_stage_hash(edir) or "", sha[CATALOGUE]]
+    else:
+        raise ValueError(f"unknown stage kind {kind}")
     return "-".join(p[:16] for p in parts)
 
 
 def stage_hash(cfg: Config, kind: str, model_id: str, split: str, prompt_mode: str = "auto") -> str:
-    return cfg.stage_hash(kind, model_id, split, prompt_mode, inputs=stage_inputs_digest(cfg, kind, split),
+    return cfg.stage_hash(kind, model_id, split, prompt_mode,
+                          inputs=stage_inputs_digest(cfg, kind, split, model_id),
                           code=code_digest(STAGE_MODULES[kind]))
 
 

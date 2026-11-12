@@ -25,3 +25,15 @@ open_ended:
   n_samples: 8
   temperature: 1.0
   max_new_tokens: 16
+extract:
+  layer_stride: 2
+  choice_evidence_levels: [0]
+  choice_rotations: [0]
+  shard_size: 2000
+  max_batch_size: 16
+  max_batch_tokens: 8192
+probe:
+  k_rank: 16
+  heldout_categories: ["laptop"]  # dev categories used only to test probes
+  cv_folds: 5
+  k_frame: choice

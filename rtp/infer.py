@@ -60,11 +60,11 @@ def run_batched(seqs: Sequence[Sequence[int]], fn: Callable[[list[int]], list[An
     On CUDA OOM the failing batch is split in half and retried once; a second OOM propagates.
     Results are returned in the original order of ``seqs``.
     """
-    from tqdm.auto import tqdm
+    from rtp.progress import track
 
     out: list[Any] = [None] * len(seqs)
     batches = make_batches([len(s) for s in seqs], max_batch_size, max_batch_tokens)
-    for batch in tqdm(batches, desc=desc, leave=False, mininterval=5.0):
+    for batch in track(batches, desc=f"{desc} batches"):
         oom = False
         try:
             res = fn(batch)

@@ -36,7 +36,7 @@ def setup_logging(level: str = "INFO") -> None:
     handler.addFilter(RedactSecrets())
     handler._rtp = True  # type: ignore[attr-defined]
     root.addHandler(handler)
-    for noisy in ("urllib3", "httpx", "filelock", "huggingface_hub.file_download"):
+    for noisy in ("urllib3", "httpx", "filelock", "huggingface_hub.file_download", "numexpr", "numexpr.utils"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 

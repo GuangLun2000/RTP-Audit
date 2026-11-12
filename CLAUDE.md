@@ -2,9 +2,10 @@
 
 Full spec: RTP_AUDIT_AGENT_BRIEF.md (on disk as `RTP_AUDIT_AGENT.md` in the repo root; gitignored, never commit it).
 Open design choices and spec deviations: DECISIONS.md. Code, comments, docstrings, commits: English only.
+Colab feedback bundles and the improvement loop (bug → regression test; method finding → PI): docs/AGENT_LOOP.md.
 
 ## Working mode (spec §0)
-- Milestones in order M0 → M6; stop and report after each agreed batch (current batch: M0–M2).
+- Milestones in order M0 → M6; stop and report after each agreed batch (done: M0–M3; next: M4 after PI review).
 - Each milestone: `pytest -q` passes, `python -m rtp.cli smoke` passes, README usage updated.
 - Anything the spec leaves open: simplest implementation + one line in DECISIONS.md. Do not widen scope.
 - Research code: never tune methods/thresholds/data to make results look good; report anomalies as they are.
@@ -26,5 +27,4 @@ Open design choices and spec deviations: DECISIONS.md. Code, comments, docstring
 - Llama repos are gated: on load failure tell the user to accept the licence and set HF_TOKEN.
 - Do not depend on open-instruct launch scripts (reference `open_instruct/dpo.py` + hparams only).
 - Secrets: HF_TOKEN only from env / Colab secrets; never in code, configs, logs, commits.
-- Drive is slow: HF cache on local disk (HF_HOME), results in RTP_WORK_DIR; estimate activation shard sizes before writing.
-- All model/dataset IDs live only in rtp/registry.py. Never reinstall torch.
+- Drive is slow: HF_HOME on local disk, results in RTP_WORK_DIR; log activation sizes first. IDs only in rtp/registry.py; never reinstall torch.

@@ -171,10 +171,16 @@ def shard_path(out_dir: Path, idx: int) -> Path:
 def run_sharded(records: Sequence[Any], shard_size: int, out_dir: Path,
                 process: Callable[[Sequence[Any], int], pd.DataFrame], desc: str = "shards") -> list[Path]:
     """Process ``records`` shard by shard, skipping shards that already have a ``.done`` marker."""
+    import time
+
+    from rtp import events
+    from rtp.progress import fmt_seconds
+
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     n_shards = max(1, -(-len(records) // shard_size)) if records else 0
     paths = []
+    t0, n_done_now = time.time(), 0
     for idx in range(n_shards):
         path = shard_path(out_dir, idx)
         marker = path.with_suffix(".done")
@@ -184,9 +190,17 @@ def run_sharded(records: Sequence[Any], shard_size: int, out_dir: Path,
             continue
         chunk = records[idx * shard_size: (idx + 1) * shard_size]
         log.info("%s: shard %d/%d (%d records)", desc, idx + 1, n_shards, len(chunk))
+        ts = time.time()
         df = process(chunk, idx)
         write_parquet(path, df)
         atomic_write_text(marker, f"{len(df)}\n")
+        n_done_now += 1
+        per = (time.time() - t0) / n_done_now
+        left = sum(1 for j in range(idx + 1, n_shards) if not shard_path(out_dir, j).with_suffix(".done").exists())
+        log.info("%s: shard %d/%d finished in %s; ETA for this stage %s", desc, idx + 1, n_shards,
+                 fmt_seconds(time.time() - ts), fmt_seconds(per * left))
+        events.emit("shard", f"{desc} shard {idx + 1}/{n_shards}", shard=idx, n_shards=n_shards, n=len(chunk),
+                    seconds=round(time.time() - ts, 1))
     return paths
 
 
