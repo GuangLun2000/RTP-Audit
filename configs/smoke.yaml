@@ -1,0 +1,49 @@
+# Smoke run: small model, 2 categories, 3 real + 3 placebo brands per category.
+# The smoke model itself comes from rtp/registry.py (SMOKE_MODEL).
+name: smoke
+seed: 0
+data:
+  categories_file: data/seeds/categories.yaml
+  placebo_file: data/seeds/placebo_names.yaml
+  natural_negatives_file: data/seeds/natural_negatives.csv
+  categories: ["running shoe", "laptop"]
+  n_real_per_category: 3
+  n_placebo_per_category: 3
+  evidence_levels: [0, 1, 2, 3, 4]
+  handicaps: [0, 1, 2, 3, 4]
+  cards_per_cell: 1
+  e0_pairs_per_substitute: 1  # evidence 0: every target x every placebo substitute x 1
+  test_categories: []
+  probe_entities_per_category: 4
+  probe_templates: 10
+measure:
+  shard_size: 2000
+  gen_check_fraction: 0.02
+  max_batch_size: 32
+  max_batch_tokens: 16384
+open_ended:
+  n_samples: 8
+  temperature: 1.0
+  max_new_tokens: 16
+extract:
+  layer_stride: 2
+  choice_evidence_levels: [0]
+  choice_rotations: [0, 2]  # target at A (no options before it) and at C (two before it)
+  shard_size: 2000
+  max_batch_size: 16
+  max_batch_tokens: 8192
+probe:
+  k_rank: 18  # 9 encoding patterns + 9 read-outs: every attribute fits (spec default 16)
+  heldout_categories: ["laptop"]  # dev categories used only to test probes
+  cv_folds: 5
+  k_frame: choice
+  n_null_k: 39  # smoke only: fewer shuffled-label nulls (pilot: 99); >= 20 so that p < 0.05 is possible
+localize:
+  pairs_per_entity: 1  # smoke only: one pair per entity at one rotation, 3 scanned layers
+  rotations: [0]
+  layer_stride: 6
+  band: 3
+  units_per_batch: 2
+  n_boot: 200
+  max_batch_size: 16
+  max_batch_tokens: 8192

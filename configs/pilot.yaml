@@ -1,0 +1,61 @@
+# Pilot run (spec §9). Data are model-independent: build once, measure every model.
+name: pilot
+seed: 0
+data:
+  categories_file: data/seeds/categories.yaml
+  placebo_file: data/seeds/placebo_names.yaml
+  natural_negatives_file: data/seeds/natural_negatives.csv
+  # 18 categories x 18 real brands. The test split (sealed) is BRAND-DISJOINT from dev, including the open-ended-only
+  # Appendix A categories: categories that share brands (footwear: running shoe, sneaker, backpack; tech: laptop,
+  # smartphone, camera, television, vacuum cleaner, printer, blender; coffee brand <-> coffee chain) stay in dev.
+  # Test: 4 Appendix A categories (8 natural negatives) + 3 new ones; dev: 6 Appendix A categories (12 natural
+  # negatives) + 5 new ones = 198 dev (category, brand) entities.
+  categories: ["running shoe", "sneaker", "backpack", "laptop", "smartphone", "camera", "television",
+               "vacuum cleaner", "printer", "blender", "coffee brand",
+               "watch", "beer", "snack brand", "electric car", "mattress", "soda", "shampoo"]
+  n_real_per_category: 18
+  n_placebo_per_category: 6
+  evidence_levels: [0, 1, 2, 3, 4]
+  handicaps: [0, 1, 2, 3, 4]
+  handicap_rating_deltas: [0.0, 0.1, 0.3, 0.5, 1.0]
+  cards_per_cell: 6  # = n_placebo_per_category: every target sees every placebo at every evidence level (spec: 4)
+  e0_pairs_per_substitute: 4  # evidence 0: every target x every placebo substitute x 4
+  test_categories: ["watch", "beer", "snack brand", "electric car", "mattress", "soda", "shampoo"]
+  probe_entities_per_category: 30
+  probe_templates: 10
+measure:
+  shard_size: 2000
+  gen_check_fraction: 0.02
+  max_batch_size: 64
+  max_batch_tokens: 32768
+open_ended:
+  n_samples: 20
+  temperature: 1.0
+  max_new_tokens: 16
+  all_natural_negatives: true  # also the 16 Appendix A categories without choice items (dev only)
+extract:
+  layer_stride: 2
+  choice_evidence_levels: [0]
+  choice_rotations: [0, 2]  # target at A (no options before it) and at C (two before it)
+  shard_size: 2000
+  max_batch_size: 16
+  max_batch_tokens: 32768
+probe:
+  k_rank: 18  # 9 encoding patterns + 9 read-outs: every attribute fits (spec default 16)
+  heldout_categories: ["camera", "blender"]  # dev categories used only to test probes
+  cv_folds: 5
+  k_frame: choice
+  n_null_k: 99  # shuffled-label K / probe nulls per frame x layer (permutation and max-over-layers p)
+localize:
+  pairs_per_entity: 4  # evidence-0 pairs per entity, 4 of the 6 substitutes in a per-entity random order
+  rotations: [0, 2]
+  layer_stride: 2
+  band: 5
+  shard_size: 48
+  units_per_batch: 4
+  n_boot: 1000
+  max_batch_size: 64
+  max_batch_tokens: 32768
+models:
+  - allenai/Llama-3.1-Tulu-3-8B-SFT
+  - allenai/Llama-3.1-Tulu-3-8B-DPO

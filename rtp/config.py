@@ -1,0 +1,403 @@
+"""YAML run configuration: loading, defaults and validation.
+
+Every run is driven by one YAML file. Unknown keys are rejected so that typos do not
+silently fall back to defaults. ``Config.data_hash`` covers only what determines the
+generated data (seed + data section), so measurement settings never invalidate data.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import hashlib
+import json
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+EVIDENCE_LEVELS = (0, 1, 2, 3, 4)
+HANDICAPS = (0, 1, 2, 3, 4)
+HANDICAP_MIN_EVIDENCE = 3  # spec 7.1: handicap only applies when ratings are shown (evidence >= 3)
+OPEN_ENDED_PROMPT_TYPES = ("name", "choose", "recommend", "pick")
+PROBE_FRAMES = ("background", "choice")
+
+
+class ConfigError(ValueError):
+    pass
+
+
+@dataclass
+class DataConfig:
+    categories_file: str = "data/seeds/categories.yaml"
+    placebo_file: str = "data/seeds/placebo_names.yaml"
+    natural_negatives_file: str = "data/seeds/natural_negatives.csv"
+    categories: list[str] | None = None  # None -> every category in categories_file
+    n_real_per_category: int = 8
+    n_placebo_per_category: int = 6
+    evidence_levels: list[int] = field(default_factory=lambda: list(EVIDENCE_LEVELS))
+    handicaps: list[int] = field(default_factory=lambda: list(HANDICAPS))
+    handicap_rating_deltas: list[float] = field(default_factory=lambda: [0.0, 0.1, 0.3, 0.5, 1.0])
+    cards_per_cell: int = 4
+    # evidence 0 (where M4 computes the identity residual): when set, every target is crossed with EVERY
+    # choice placebo as substitute, this many pairs each (balanced substitutes, more pairs); None = cards_per_cell
+    e0_pairs_per_substitute: int | None = None
+    test_categories: list[str] = field(default_factory=list)
+    probe_entities_per_category: int = 30
+    probe_templates: int = 10
+    # M3: "background" = spec §7.5 text ("Background: ... I'm considering X."); "choice" = the same background
+    # followed by the evidence-0 choice prompt with X as an option, read at X's option line (where M4 transplants)
+    probe_frames: list[str] = field(default_factory=lambda: list(PROBE_FRAMES))
+    # M3 binding controls: per entity one two-brand item and one undescribed-name item (evaluation only)
+    probe_controls: bool = True
+
+
+@dataclass
+class MeasureConfig:
+    shard_size: int = 2000
+    gen_check_fraction: float = 0.02
+    gen_max_new_tokens: int = 4
+    consistency_warn_below: float = 0.90
+    max_batch_size: int = 64
+    max_batch_tokens: int = 32768
+
+
+@dataclass
+class OpenEndedConfig:
+    prompt_types: list[str] = field(default_factory=lambda: list(OPEN_ENDED_PROMPT_TYPES))
+    n_samples: int = 20
+    temperature: float = 1.0
+    max_new_tokens: int = 16
+    # also measure every Appendix A category that has no choice items (brands from the
+    # `open_ended_only` section of categories.yaml); these extra categories are always 'dev'
+    all_natural_negatives: bool = False
+
+
+@dataclass
+class ExtractConfig:
+    """M3 activation extraction (spec §7.4)."""
+    layer_stride: int = 2  # hidden-state layers 0 (embeddings), stride, 2*stride, ... up to the last block
+    choice_evidence_levels: list[int] = field(default_factory=lambda: [0])  # where M4 computes the residual
+    choice_rotations: list[int] = field(default_factory=lambda: [0])  # M4 recomputes activations itself
+    shard_size: int = 2000
+    max_batch_size: int = 32
+    max_batch_tokens: int = 32768
+
+
+@dataclass
+class ProbeConfig:
+    """M3 probes and knowledge subspace K (spec §7.5)."""
+    k_rank: int = 16
+    heldout_categories: list[str] = field(default_factory=list)  # dev categories used only to TEST probes
+    cv_folds: int = 5
+    alphas: list[float] = field(default_factory=lambda: [1.0, 10.0, 100.0, 1000.0, 10000.0])
+    k_frame: str = "choice"  # frame whose probes define the main K (both frames are exported)
+    n_random_subspaces: int = 20
+    n_null_k: int = 99  # shuffled-label K / probe nulls per frame x layer (permutation p >= 1 / (n + 1))
+
+
+@dataclass
+class LocalizeConfig:
+    """M3 readiness: where is the name effect carried? Full activation transplants on evidence-0 dev pairs."""
+    pairs_per_entity: int = 6
+    rotations: list[int] = field(default_factory=lambda: [0, 2])
+    layer_stride: int | None = None  # scanned layers stride, 2*stride, ... < n_blocks (never 0); None = extract's
+    band: int = 5  # consecutive layers patched together in the band transplant
+    shard_size: int = 48  # units (pair x rotation) per shard
+    units_per_batch: int = 4  # units whose transplant configurations are scored together
+    n_boot: int = 1000
+    max_batch_size: int = 64
+    max_batch_tokens: int = 32768
+
+
+@dataclass
+class Config:
+    name: str
+    seed: int = 0
+    data: DataConfig = field(default_factory=DataConfig)
+    measure: MeasureConfig = field(default_factory=MeasureConfig)
+    open_ended: OpenEndedConfig = field(default_factory=OpenEndedConfig)
+    extract: ExtractConfig = field(default_factory=ExtractConfig)
+    probe: ProbeConfig = field(default_factory=ProbeConfig)
+    localize: LocalizeConfig = field(default_factory=LocalizeConfig)
+    models: list[str] = field(default_factory=list)
+    source_path: str | None = None  # not part of the hash
+
+    # ------------------------------------------------------------------ helpers
+    def to_dict(self) -> dict[str, Any]:
+        d = dataclasses.asdict(self)
+        d.pop("source_path", None)
+        return d
+
+    def to_yaml(self) -> str:
+        return yaml.safe_dump(self.to_dict(), sort_keys=False, allow_unicode=True)
+
+    @property
+    def config_hash(self) -> str:
+        return _hash(self.to_dict())
+
+    @property
+    def data_hash(self) -> str:
+        """Seed + data section + the CONTENT of the seed files (review flags excluded) + generator code.
+
+        Editing a brand, alias, range or placebo name, or the generator code, changes the hash;
+        ticking ``needs_review`` / ``needs_web_check`` after a review does not.
+        """
+        from rtp.provenance import code_digest
+
+        return _hash({"seed": self.seed, "data": dataclasses.asdict(self.data), "seed_files": self.seed_file_digests(),
+                      "code": code_digest("rtp.data.build", exclude=())})
+
+    def seed_file_digests(self) -> dict[str, str]:
+        d = self.data
+        return {"categories": _yaml_digest(self.resolve(d.categories_file)),
+                "placebos": _yaml_digest(self.resolve(d.placebo_file)),
+                "natural_negatives": _bytes_digest(self.resolve(d.natural_negatives_file))}
+
+    def stage_hash(self, stage: str, model_id: str, split: str, prompt_mode: str = "auto", inputs: str = "",
+                   code: str = "") -> str:
+        """Identity of a per-model stage dir: the stage's settings + model + split + prompt mode + a digest of
+        the input FILES it reads (``inputs``) + a digest of the code that computes it (``code``).
+
+        Keyed on input content rather than on the whole data hash, so that adding probe items or
+        editing probe placebos does not invalidate behavioural stages whose inputs are unchanged.
+        Use ``rtp.stages.stage_hash`` to get the right ``inputs``/``code`` for a stage.
+        """
+        section = dataclasses.asdict({"measure": self.measure, "open_ended": self.open_ended,
+                                      "extract": self.extract, "probe": self.probe,
+                                      "localize": self.localize}[stage])
+        for k in ("max_batch_size", "max_batch_tokens", "units_per_batch"):  # only reorder work: allow resuming
+            section.pop(k, None)
+        if stage == "open_ended":
+            section["shard_size"] = self.measure.shard_size  # open-ended shards by measure.shard_size
+        if stage == "localize":  # the stride localize actually scans (None = extract's)
+            section["layer_stride"] = self.localize.layer_stride or self.extract.layer_stride
+        from rtp.registry import get_model_spec
+
+        spec = get_model_spec(model_id)
+        return _hash({"stage": stage, "seed": self.seed, "settings": section, "model": model_id, "split": split,
+                      "prompt_mode": prompt_mode, "inputs": inputs, "code": code,
+                      "model_spec": dataclasses.asdict(spec) if spec is not None else None})
+
+    def resolve(self, rel: str) -> Path:
+        """Resolve a seed-file path: absolute paths as-is, relative ones against the repo root."""
+        p = Path(rel)
+        return p if p.is_absolute() else REPO_ROOT / p
+
+
+def _hash(obj: Any) -> str:
+    blob = json.dumps(obj, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()[:16]
+
+
+REVIEW_FLAGS = ("needs_review", "needs_web_check")
+
+
+def _strip_review_flags(obj: Any) -> Any:
+    if isinstance(obj, dict):
+        return {k: _strip_review_flags(v) for k, v in obj.items() if k not in REVIEW_FLAGS}
+    if isinstance(obj, list):
+        return [_strip_review_flags(v) for v in obj]
+    return obj
+
+
+def _yaml_digest(path: Path) -> str:
+    if not path.exists():
+        raise ConfigError(f"seed file not found: {path}")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            content = _strip_review_flags(yaml.safe_load(fh))
+    except yaml.YAMLError as exc:
+        raise ConfigError(f"seed file {path} is not valid YAML: {exc}") from exc
+    # default=str: reviewers may add e.g. dates (datetime.date) that JSON cannot encode
+    blob = json.dumps(content, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()[:16]
+
+
+def _bytes_digest(path: Path) -> str:
+    if not path.exists():
+        raise ConfigError(f"seed file not found: {path}")
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+
+
+def _build(cls, raw: dict[str, Any] | None, where: str):
+    raw = raw or {}
+    if not isinstance(raw, dict):
+        raise ConfigError(f"'{where}' must be a mapping, got {type(raw).__name__}")
+    known = {f.name for f in dataclasses.fields(cls)}
+    unknown = sorted(set(raw) - known)
+    if unknown:
+        raise ConfigError(f"unknown key(s) in '{where}': {unknown}; allowed: {sorted(known)}")
+    return cls(**raw)
+
+
+def config_from_dict(raw: dict[str, Any], source_path: str | None = None) -> Config:
+    if not isinstance(raw, dict):
+        raise ConfigError("config root must be a mapping")
+    allowed = {"name", "seed", "data", "measure", "open_ended", "extract", "probe", "localize", "models"}
+    unknown = sorted(set(raw) - allowed)
+    if unknown:
+        raise ConfigError(f"unknown top-level key(s): {unknown}; allowed: {sorted(allowed)}")
+    if "name" not in raw:
+        raise ConfigError("config needs a 'name'")
+    cfg = Config(
+        name=raw["name"],
+        seed=raw.get("seed", 0),
+        data=_build(DataConfig, raw.get("data"), "data"),
+        measure=_build(MeasureConfig, raw.get("measure"), "measure"),
+        open_ended=_build(OpenEndedConfig, raw.get("open_ended"), "open_ended"),
+        extract=_build(ExtractConfig, raw.get("extract"), "extract"),
+        probe=_build(ProbeConfig, raw.get("probe"), "probe"),
+        localize=_build(LocalizeConfig, raw.get("localize"), "localize"),
+        models=list(raw.get("models") or []),
+        source_path=source_path,
+    )
+    validate(cfg)
+    return cfg
+
+
+def apply_overrides(cfg: Config, sets: list[str] | None) -> Config:
+    """Apply ``section.key=value`` overrides (value parsed as YAML) and re-validate."""
+    if not sets:
+        return cfg
+    raw = cfg.to_dict()
+    for item in sets:
+        if "=" not in item:
+            raise ConfigError(f"--set expects SECTION.KEY=VALUE, got '{item}'")
+        key, value = item.split("=", 1)
+        parts = key.strip().split(".")
+        node = raw
+        for part in parts[:-1]:
+            if part not in node or not isinstance(node[part], dict):
+                raise ConfigError(f"--set: unknown section '{part}' in '{key}'")
+            node = node[part]
+        if parts[-1] not in node:
+            raise ConfigError(f"--set: unknown key '{key}'")
+        node[parts[-1]] = yaml.safe_load(value)
+    return config_from_dict(raw, source_path=cfg.source_path)
+
+
+def load_config(path: str | Path) -> Config:
+    path = Path(path)
+    if not path.exists():
+        alt = REPO_ROOT / path
+        if alt.exists():
+            path = alt
+        else:
+            raise ConfigError(f"config file not found: {path}")
+    with open(path, encoding="utf-8") as fh:
+        raw = yaml.safe_load(fh)
+    return config_from_dict(raw, source_path=str(path))
+
+
+def _check_types(cfg: Config, need) -> None:
+    """Every setting has the type of its default: YAML ``true`` is not a size, ``2.5`` is not a count, and list
+    elements match too (``rotations: [true, 0]`` is refused). Settings whose default is None are checked
+    individually in ``validate``."""
+    def kind(x: Any) -> str | None:
+        if isinstance(x, bool):
+            return "bool"
+        if isinstance(x, int):
+            return "int"
+        if isinstance(x, float):
+            return "float"
+        if isinstance(x, str):
+            return "str"
+        return None
+
+    def ok(v: Any, want: str | None) -> bool:
+        if want is None:
+            return True
+        got = kind(v)
+        return got == want or (want == "float" and got == "int")
+
+    for sec_name in ("data", "measure", "open_ended", "extract", "probe", "localize"):
+        sec = getattr(cfg, sec_name)
+        for f in dataclasses.fields(sec):
+            default = f.default if f.default is not dataclasses.MISSING else (
+                f.default_factory() if f.default_factory is not dataclasses.MISSING else None)  # type: ignore[misc]
+            v = getattr(sec, f.name)
+            if default is None or v is None and default is None:
+                continue
+            if isinstance(default, list):
+                want = kind(default[0]) if default else None
+                need(isinstance(v, list) and all(ok(x, want) for x in v),
+                     f"{sec_name}.{f.name} must be a list of {want or 'values'}, got {v!r}")
+            else:
+                need(ok(v, kind(default)), f"{sec_name}.{f.name} must be {kind(default)}, got {v!r}")
+
+
+def validate(cfg: Config) -> None:
+    def need(cond: bool, msg: str) -> None:
+        if not cond:
+            raise ConfigError(msg)
+
+    need(isinstance(cfg.name, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", cfg.name) is not None,
+         "name must match [A-Za-z0-9][A-Za-z0-9._-]* (it becomes a directory under runs/)")
+    need(isinstance(cfg.seed, int) and not isinstance(cfg.seed, bool), "seed must be an integer")
+    _check_types(cfg, need)
+    d = cfg.data
+    need(d.n_real_per_category >= 3, "n_real_per_category must be >= 3 (target + 2 real competitors)")
+    need(d.n_placebo_per_category >= 2, "n_placebo_per_category must be >= 2 (target substitute + distractor)")
+    need(len(d.evidence_levels) > 0 and set(d.evidence_levels) <= set(EVIDENCE_LEVELS),
+         f"evidence_levels must be a non-empty subset of {list(EVIDENCE_LEVELS)}")
+    need(len(set(d.evidence_levels)) == len(d.evidence_levels), "evidence_levels has duplicates")
+    need(len(d.handicaps) > 0 and set(d.handicaps) <= set(HANDICAPS),
+         f"handicaps must be a non-empty subset of {list(HANDICAPS)}")
+    need(0 in d.handicaps, "handicaps must contain 0 (used for evidence levels < 3)")
+    need(len(set(d.handicaps)) == len(d.handicaps), "handicaps has duplicates")
+    need(len(d.handicap_rating_deltas) == len(HANDICAPS), "handicap_rating_deltas needs one value per handicap 0-4")
+    need(all(x >= 0 for x in d.handicap_rating_deltas) and d.handicap_rating_deltas[0] == 0,
+         "handicap_rating_deltas must be >= 0 and start at 0")
+    need(d.cards_per_cell >= 1, "cards_per_cell must be >= 1")
+    need(d.e0_pairs_per_substitute is None or (isinstance(d.e0_pairs_per_substitute, int)
+                                               and d.e0_pairs_per_substitute >= 1),
+         "e0_pairs_per_substitute must be null or an integer >= 1")
+    need(d.probe_entities_per_category >= 1 and d.probe_templates >= 1, "probe sizes must be >= 1")
+    if d.categories is not None:
+        need(len(d.categories) == len(set(d.categories)) and len(d.categories) > 0,
+             "data.categories must be non-empty and unique")
+        missing = sorted(set(d.test_categories) - set(d.categories))
+        need(not missing, f"test_categories not in data.categories: {missing}")
+    m = cfg.measure
+    need(m.shard_size >= 1, "shard_size must be >= 1")
+    need(0.0 <= m.gen_check_fraction <= 1.0, "gen_check_fraction must be in [0, 1]")
+    need(m.max_batch_size >= 1 and m.max_batch_tokens >= 1, "batch limits must be >= 1")
+    o = cfg.open_ended
+    need(set(o.prompt_types) <= set(OPEN_ENDED_PROMPT_TYPES) and len(o.prompt_types) > 0,
+         f"open_ended.prompt_types must be a non-empty subset of {list(OPEN_ENDED_PROMPT_TYPES)}")
+    need(o.n_samples >= 1 and o.max_new_tokens >= 1 and o.temperature > 0, "bad open_ended sampling settings")
+    need(all(isinstance(x, str) and x for x in cfg.models), "models must be a list of non-empty strings")
+    need(len(d.probe_frames) > 0 and set(d.probe_frames) <= set(PROBE_FRAMES),
+         f"data.probe_frames must be a non-empty subset of {list(PROBE_FRAMES)}")
+    x = cfg.extract
+    need(x.layer_stride >= 1 and x.shard_size >= 1 and x.max_batch_size >= 1 and x.max_batch_tokens >= 1,
+         "extract sizes must be >= 1")
+    need(len(x.choice_evidence_levels) > 0 and set(x.choice_evidence_levels) <= set(EVIDENCE_LEVELS),
+         f"extract.choice_evidence_levels must be a non-empty subset of {list(EVIDENCE_LEVELS)}")
+    need(len(x.choice_rotations) > 0 and set(x.choice_rotations) <= {0, 1, 2, 3}, "extract.choice_rotations in 0-3")
+    pr = cfg.probe
+    need(pr.k_rank >= 1 and pr.cv_folds >= 2 and pr.n_random_subspaces >= 1, "bad probe sizes")
+    need(isinstance(pr.n_null_k, int) and not isinstance(pr.n_null_k, bool) and pr.n_null_k >= 20,
+         "probe.n_null_k must be an integer >= 20 (a permutation p is >= 1/(n+1); readiness needs p < 0.05)")
+    need(len(pr.alphas) > 0 and all(a > 0 for a in pr.alphas), "probe.alphas must be positive")
+    need(pr.k_frame in d.probe_frames, "probe.k_frame must be one of data.probe_frames")
+    lz = cfg.localize
+    need(lz.layer_stride is None or (isinstance(lz.layer_stride, int) and not isinstance(lz.layer_stride, bool)
+                                     and lz.layer_stride >= 1), "localize.layer_stride must be null or an integer >= 1")
+    need(all(isinstance(v, int) and not isinstance(v, bool) and v >= 1
+             for v in (lz.pairs_per_entity, lz.band, lz.shard_size,
+                                                      lz.units_per_batch, lz.n_boot, lz.max_batch_size,
+                                                      lz.max_batch_tokens)), "localize sizes must be integers >= 1")
+    need(len(lz.rotations) > 0 and set(lz.rotations) <= {0, 1, 2, 3} and len(set(lz.rotations)) == len(lz.rotations),
+         "localize.rotations: distinct values in 0-3")
+    need(lz.layer_stride is None or lz.layer_stride % x.layer_stride == 0,
+         "localize.layer_stride must be a multiple of extract.layer_stride (M4 needs K at the chosen layer)")
+    if d.categories is not None:
+        bad = [c for c in pr.heldout_categories if c not in d.categories or c in d.test_categories]
+        need(not bad, f"probe.heldout_categories must be dev categories of the run: {bad}")
+        need(len(set(d.categories) - set(d.test_categories) - set(pr.heldout_categories)) >= 1,
+             "probes need at least one dev category that is not held out")

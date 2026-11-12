@@ -1,1 +1,9 @@
 RTP_AUDIT_AGENT.md
+
+# local environment
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+rtp_work/
