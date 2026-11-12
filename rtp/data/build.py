@@ -83,6 +83,19 @@ def cell_counts(items: list[dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["split", "category", "evidence_level", "handicap", "name_condition", "n_items"])
 
 
+def card_set_balance_warning(cfg: Config) -> str | None:
+    """Card set k of a target uses placebo substitute (target index + k) mod n_placebo. Unless cards_per_cell is a
+    multiple of n_placebo, each target sees only a subset of the placebos at evidence >= 1 (all of them at
+    evidence 0), and the placebo names' own pull becomes an entity-specific offset in ne_e1..ne_e4."""
+    d = cfg.data
+    if 1 in d.evidence_levels or any(e >= 1 for e in d.evidence_levels):
+        if d.cards_per_cell % d.n_placebo_per_category:
+            return (f"cards_per_cell={d.cards_per_cell} is not a multiple of n_placebo_per_category="
+                    f"{d.n_placebo_per_category}: at evidence >= 1 each target sees only some placebo substitutes, "
+                    f"so placebo-name pull adds an entity-specific offset to ne_e1..ne_e4 (and the ladder residual)")
+    return None
+
+
 def data_report(cfg: Config, out: dict[str, Any], counts: pd.DataFrame) -> str:
     items, probes, cat = out["choice"], out["probe"], out["catalogue"]
     lines = [f"# Data report: {cfg.name}", "",
@@ -97,6 +110,9 @@ def data_report(cfg: Config, out: dict[str, Any], counts: pd.DataFrame) -> str:
              f" / {out['placebo_stats']['n_names']}"]
     if out["needs_review"]:
         lines.append(f"- **categories.yaml entries still marked needs_review: {', '.join(out['needs_review'])}**")
+    w = card_set_balance_warning(cfg)
+    if w:
+        lines.append(f"- **WARNING: {w}**")
     lines += ["", "## Catalogue", "", "| split | category | real | placebo | natural negatives |", "|---|---|---|---|---|"]
     for c in out["categories"]:
         rows = [r for r in cat if r["category"] == c]
@@ -152,6 +168,9 @@ def build_data(cfg: Config, force: bool = False) -> Path:
         snapshot_sha[path.name] = io.file_sha256(ddir / SEED_SNAPSHOT_DIR / path.name)
     counts = cell_counts(out["choice"])
     io.atomic_write_text(ddir / "cell_counts.csv", counts.to_csv(index=False))
+    w = card_set_balance_warning(cfg)
+    if w:
+        log.warning("%s", w)
     report = data_report(cfg, out, counts)
     io.atomic_write_text(ddir / "data_report.md", report)
     manifest = {"config": cfg.name, "seed": cfg.seed, "data_hash": cfg.data_hash,

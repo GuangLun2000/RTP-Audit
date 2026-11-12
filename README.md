@@ -120,7 +120,7 @@ Outputs in `runs/<config>/<model_slug>/measure/`:
   argmax_forced, s_target_free, s_target_forced, s_target_lo, s_target_hi, c_free, c_forced, name_share_*,
   leak_*, pruned_*, gen_text, gen_mode`.
 - `pair_scores.parquet`, `name_effects.parquet`.
-- `entity_evidence.parquet`: entity × evidence-level name effects (SEs over card sets), plus the residual of the
+- `entity_evidence.parquet`: entity × evidence-level name effects (SEs over placebo substitutes), plus the residual of the
   robust regression through the origin of evidence 4 on evidence 0.
 - `estimators_by_entity.parquet` (O5 / O3 / O4), `coverage_by_level.parquet`, `answer_channel_by_entity.parquet`,
   `answer_format.json` (format shifts, estimator agreement, evidence-0 bounds).
@@ -182,15 +182,15 @@ the Named and Picked shares across checkpoints. Pass `--unseal` to include test-
 python -m rtp.cli extract --config configs/pilot.yaml --model allenai/Llama-3.1-Tulu-3-8B-SFT
 ```
 
-Extracts float16 activations `[n_items, n_layers, d_model]` with `output_hidden_states=True` at every
-`extract.layer_stride`-th hidden-state layer (the last one is always included). Prompts are rendered exactly as
+Extracts float16 activations `[n_items, n_layers, d_model]` with `output_hidden_states=True` at hidden-state
+layers 0, `extract.layer_stride`, 2 × stride, … below the number of blocks (the post-final-norm state is excluded). Prompts are rendered exactly as
 they are measured. The extracted positions:
 
 - probe items: the last token of the read brand-name mention;
 - evidence-0 choice items (rotation 0 by default): the last token of the target name, and the last input token.
 
-The expected size is logged before writing. For the pilot on an 8B model it is about 1.6 GB, of which choice items
-are about 0.85 GB.
+The expected size is logged before writing. For the pilot on an 8B model (stride 2: 16 layers) it is about 6.0 GB: 7,920
+probe items (1.0 GB) and 19,008 evidence-0 choice items at 2 positions (5.0 GB).
 
 ### `probe` (M3, dev split only)
 

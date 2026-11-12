@@ -49,10 +49,14 @@ def run_format_probe(cfg: Config, model_id: str, n_items: int = 40, prompt_mode:
     from rtp.measure.name_effect import _pct, consistency
     from rtp.models import apply_prompt_mode, load_model
 
+    from rtp.data.build import load_catalogue
+    from rtp.measure.choice import case_sensitive_names
+
     items = sample_items(load_choice_items(cfg, "dev"), n_items, cfg.seed)
     lm = apply_prompt_mode(load_model(model_id), prompt_mode)
     letters = letter_token_ids(lm.tokenizer)
-    df = score_items(lm, items, letters, {it["item_id"] for it in items}, cfg)
+    df = score_items(lm, items, letters, {it["item_id"] for it in items}, cfg,
+                     case_sensitive=case_sensitive_names(load_catalogue(cfg, "dev")))
     meta = pd.DataFrame([{"item_id": it["item_id"], "evidence_level": it["evidence_level"],
                           "version": "placebo" if it["target_is_placebo"] else "real",
                           "target_label": it["target_label"]} for it in items])

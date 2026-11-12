@@ -105,7 +105,8 @@ def validate_choice_items(items: list[dict[str, Any]]) -> int:
 def _check_card_sets(items: list[dict[str, Any]]) -> None:
     """Matched cards: within a card set, every cell shows the same options in the same order with the same
     card content. Cells differ only in WHICH fields are visible (evidence level) and in the target's rating
-    (handicap): every field that two cells both show must be equal, except the target's rating."""
+    (handicap): every field that two cells both show must be equal; the target's rating must be equal among
+    cells with the same handicap."""
     ref: dict[tuple[str, bool, int], tuple[Any, ...]] = {}
     seen: dict[tuple[str, bool, int, str, str], Any] = {}
     for it in items:
@@ -115,9 +116,10 @@ def _check_card_sets(items: list[dict[str, Any]]) -> None:
             raise SchemaError(f"card set {it['card_set']}: options differ between cells (item {it['item_id']})")
         for o in it["options"]:
             for f, v in o.items():
-                if v is None or f in ("label", "name", "role", "is_placebo") or (f == "rating" and o["role"] == "target"):
+                if v is None or f in ("label", "name", "role", "is_placebo"):
                     continue
-                k = (*key, o["label"], f)
+                # the target's rating moves with the handicap only: equal among cells with the same handicap
+                k = (*key, o["label"], f, it["handicap"] if (f == "rating" and o["role"] == "target") else None)
                 if seen.setdefault(k, v) != v:
                     raise SchemaError(f"card set {it['card_set']}: option {o['label']} field '{f}' differs between "
                                       f"cells (item {it['item_id']})")

@@ -62,9 +62,9 @@ class ItemPaths:
 # Words that follow a bare "A" when it IS the answer ("A is the best choice", "A would suit you"); every other
 # space + lowercase token after "A" is read as the article ("A good choice ...").
 ANSWER_CONTINUATIONS = frozenset(
-    "is are was were would will could should might may can seems seem looks look has have had offers offer "
-    "provides provide gives give stands appears sounds fits ranks comes wins beats edges and or because since as "
-    "for with from at by to then also still here which that if but so".split())
+    "is are was were would will could should might may seems seem looks has have had offers "
+    "provides gives stands appears sounds fits ranks comes wins beats edges and or because since as "
+    "for with from at by to then also here which that if but so".split())  # not nouns: "A look", "A can"
 
 
 @lru_cache(maxsize=None)
@@ -238,7 +238,7 @@ def _expand_rows(lm: LoadedModel, cache: Any, mask: torch.Tensor, prefixes: list
         depth = len(part[0][1])
         node_tok = torch.tensor([list(nd) for _, nd in part], dtype=torch.long, device=lm.device)
         try:
-            _check_window(cache, (keep_len if keep_len is not None else mask.shape[1]) + depth)
+            _check_window(cache, mask.shape[1] + depth)  # the cache holds the whole (forced) prefix
             rows = torch.tensor([r for r, _ in part], dtype=torch.long, device=mask.device)
             c = _select_cache(cache, rows, keep_len)
             m = mask[rows][:, :keep_len] if keep_len is not None else mask[rows]

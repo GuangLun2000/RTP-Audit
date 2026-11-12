@@ -120,7 +120,28 @@ def _norm(text: str) -> str:
     return re.sub(r"[^0-9a-z]+", " ", _ascii(text).lower().replace("'", "")).strip()
 
 
-def parse_answer(text: str | None, options: Sequence[dict[str, Any]]) -> str | None:
+def _name_hit(name: str, text: str, case_sensitive: bool, anywhere: bool) -> int | None:
+    """Start of the first whole-word occurrence of ``name`` in ``text`` (a trailing "s" tolerated), or None.
+    Case-sensitive names (catalogue ``match_case``: ordinary words such as Sharp, KIND) match as written or in
+    capitals only, as in open-ended matching."""
+    def keep(x: str) -> str:
+        return re.sub(r"[^0-9A-Za-z]+", " ", _ascii(x).replace("'", "")).strip()
+
+    forms = [keep(name), keep(name).upper()] if case_sensitive else [_norm(name)]
+    hay = keep(text) if case_sensitive else _norm(text)
+    best = None
+    for f in dict.fromkeys(forms):
+        if not f:
+            continue
+        pat = re.escape(f) + r"s?(?![0-9A-Za-z])"
+        m = re.search(r"(?<![0-9A-Za-z])" + pat, hay) if anywhere else re.match(pat, hay)
+        if m and (best is None or m.start() < best):
+            best = m.start()
+    return best
+
+
+def parse_answer(text: str | None, options: Sequence[dict[str, Any]],
+                 case_sensitive: frozenset[str] | set[str] = frozenset()) -> str | None:
     """Option letter of a FREE answer: the option whose brand name the answer starts with ("A&W is ..."), else an
     answer letter, else the option whose name appears as a whole word (earliest wins), else the option whose
     name the WHOLE short answer is a truncated prefix of (generation stops after a few tokens: "Bev" ->
@@ -130,18 +151,16 @@ def parse_answer(text: str | None, options: Sequence[dict[str, Any]]) -> str | N
         return None
     t = _norm(text)
     for o in options:  # a name at the very start wins over a letter reading of its first character
-        n = _norm(o["name"])
-        if n and re.match(re.escape(n) + r"s?(?![0-9a-z])", t):
+        if _name_hit(o["name"], text, o["name"] in case_sensitive, anywhere=False) is not None:
             return o["label"]
     letter = parse_letter(_ascii(text))
     if letter or not t:
         return letter
     best = None
     for o in options:
-        n = _norm(o["name"])
-        m = re.search(r"(?<![0-9a-z])" + re.escape(n) + r"s?(?![0-9a-z])", t)
-        if m and (best is None or m.start() < best[0]):
-            best = (m.start(), o["label"])
+        pos = _name_hit(o["name"], text, o["name"] in case_sensitive, anywhere=True)
+        if pos is not None and (best is None or pos < best[0]):
+            best = (pos, o["label"])
     if best:
         return best[1]
     joined = t.replace(" ", "")
@@ -180,17 +199,24 @@ _STRONG_LETTER = re.compile(_STRONG_CUE + r"([ABCD])(?![A-Za-z0-9])")
 _BARE_LETTER = re.compile(r"(?<![A-Za-z0-9'])([ABCD])(?![A-Za-z0-9'])")
 
 
-def _name_patterns(options: Sequence[dict[str, Any]]) -> list[tuple[str, str]]:
+def _name_patterns(options: Sequence[dict[str, Any]],
+                   case_sensitive: frozenset[str] | set[str] = frozenset()) -> list[tuple[str, str]]:
     out = []
     for o in options:
         words = [w for w in re.split(r"[^0-9A-Za-z]+", _ascii(o["name"])) if w]
-        if words:  # "Levi's" matches "Levis" / "Levi's"; "New Balance" matches "New-Balance"
-            out.append((o["label"], r"(?<![0-9A-Za-z])(?i:" + r"[^0-9A-Za-z]*".join(map(re.escape, words))
-                        + r")(?![0-9A-Za-z])"))
+        if not words:  # "Levi's" matches "Levis" / "Levi's"; "New Balance" matches "New-Balance"
+            continue
+        if o["name"] in case_sensitive:  # as written or in capitals ("Sharp", "SHARP"; not "a sharp picture")
+            body = "(?:" + "|".join(r"[^0-9A-Za-z]*".join(map(re.escape, ws)) for ws in
+                                    dict.fromkeys([tuple(words), tuple(w.upper() for w in words)])) + ")"
+        else:
+            body = r"(?i:" + r"[^0-9A-Za-z]*".join(map(re.escape, words)) + ")"
+        out.append((o["label"], r"(?<![0-9A-Za-z])" + body + r"(?![0-9A-Za-z])"))
     return out
 
 
-def parse_final_answer(text: str | None, options: Sequence[dict[str, Any]]) -> str | None:
+def parse_final_answer(text: str | None, options: Sequence[dict[str, Any]],
+                       case_sensitive: frozenset[str] | set[str] = frozenset()) -> str | None:
     """Option of a longer (deferred) free answer ("Based on the reviews, the best choice is **C**").
 
     The LAST option named after a concluding cue (letter or brand name) wins. Without a cue, the answer is
@@ -201,7 +227,7 @@ def parse_final_answer(text: str | None, options: Sequence[dict[str, Any]]) -> s
     if not text:
         return None
     t = _ascii(text)
-    names = _name_patterns(options)
+    names = _name_patterns(options, case_sensitive)
     spans = [m.span() for _, pat in names for m in re.finditer(pat, t)]
 
     def in_name(pos: int) -> bool:  # the "A" of "A&W" is part of a name, not a letter answer
@@ -231,7 +257,8 @@ def item_answer_paths(tokenizer: Any, items: Sequence[dict[str, Any]], letter_id
 
 
 def score_items(lm: LoadedModel, items: Sequence[dict[str, Any]], letter_ids: dict[str, list[int]],
-                gen_ids: set[str], cfg: Config, patches_for=None) -> pd.DataFrame:
+                gen_ids: set[str], cfg: Config, patches_for=None,
+                case_sensitive: frozenset[str] | set[str] = frozenset()) -> pd.DataFrame:
     """Answer-path scores of ``items`` (see rtp.measure.answers): p_A..p_D and s_target are the primary O5
     estimator; O3 (free), O4 (forced), coverage, channels, identity leak and bounds are stored alongside."""
     from rtp.infer import generate
@@ -264,7 +291,8 @@ def score_items(lm: LoadedModel, items: Sequence[dict[str, Any]], letter_ids: di
         free_check = [free[i] for i in check]
         short = generate(lm, free_check, max_new_tokens=m.gen_max_new_tokens, do_sample=False,
                          max_batch_size=m.max_batch_size, max_batch_tokens=m.max_batch_tokens)
-        deferred = [k for k, (i, t) in enumerate(zip(check, short)) if parse_answer(t[0], items[i]["options"]) is None]
+        deferred = [k for k, (i, t) in enumerate(zip(check, short))
+                    if parse_answer(t[0], items[i]["options"], case_sensitive) is None]
         long = generate(lm, [free_check[k] for k in deferred], max_new_tokens=DEFERRED_MAX_TOKENS, do_sample=False,
                         max_batch_size=m.max_batch_size, max_batch_tokens=m.max_batch_tokens) if deferred else []
         long_of = dict(zip(deferred, long))
@@ -272,13 +300,18 @@ def score_items(lm: LoadedModel, items: Sequence[dict[str, Any]], letter_ids: di
             opts = items[i]["options"]
             if k in long_of:
                 df.at[i, "gen_text"] = long_of[k][0]
-                df.at[i, "gen_letter"] = parse_final_answer(long_of[k][0], opts)
+                df.at[i, "gen_letter"] = parse_final_answer(long_of[k][0], opts, case_sensitive)
                 df.at[i, "gen_mode"] = "deferred"
             else:
                 df.at[i, "gen_text"] = t[0]
-                df.at[i, "gen_letter"] = parse_answer(t[0], opts)
+                df.at[i, "gen_letter"] = parse_answer(t[0], opts, case_sensitive)
                 df.at[i, "gen_mode"] = "immediate"
     return df
+
+
+def case_sensitive_names(catalogue: Sequence[dict[str, Any]]) -> frozenset[str]:
+    """Real brands flagged ``match_case`` in the catalogue (ordinary words: Sharp, KIND, Quest, ...)."""
+    return frozenset(r["entity"] for r in catalogue if r.get("match_case") and not r["is_placebo"])
 
 
 # --------------------------------------------------------------------------- stage
@@ -308,6 +341,7 @@ def run_measure(cfg: Config, model_id: str, split: str = "dev", unseal: bool = F
         if not items:
             raise ValueError(f"no choice items in split '{split}'")
         gen_ids = select_gen_check([it["item_id"] for it in items], cfg.measure.gen_check_fraction, cfg.seed)
+        case_names = case_sensitive_names(catalogue)
         state: dict[str, Any] = {}
 
         def process(chunk, idx):
@@ -316,7 +350,7 @@ def run_measure(cfg: Config, model_id: str, split: str = "dev", unseal: bool = F
                 stages.record_model_revision(sdir, state["lm"].model)
                 state["letters"] = letter_token_ids(state["lm"].tokenizer)
                 io.write_json(sdir / "letter_tokens.json", state["letters"])
-            return score_items(state["lm"], chunk, state["letters"], gen_ids, cfg)
+            return score_items(state["lm"], chunk, state["letters"], gen_ids, cfg, case_sensitive=case_names)
 
         io.run_sharded(items, cfg.measure.shard_size, sdir / "shards", process, desc="measure")
         scores = io.load_shards(sdir / "shards")

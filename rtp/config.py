@@ -173,6 +173,8 @@ class Config:
             section.pop(k, None)
         if stage == "open_ended":
             section["shard_size"] = self.measure.shard_size  # open-ended shards by measure.shard_size
+        if stage == "localize":  # the stride localize actually scans (None = extract's)
+            section["layer_stride"] = self.localize.layer_stride or self.extract.layer_stride
         from rtp.registry import get_model_spec
 
         spec = get_model_spec(model_id)
@@ -291,6 +293,43 @@ def load_config(path: str | Path) -> Config:
     return config_from_dict(raw, source_path=str(path))
 
 
+def _check_types(cfg: Config, need) -> None:
+    """Every setting has the type of its default: YAML ``true`` is not a size, ``2.5`` is not a count, and list
+    elements match too (``rotations: [true, 0]`` is refused). Settings whose default is None are checked
+    individually in ``validate``."""
+    def kind(x: Any) -> str | None:
+        if isinstance(x, bool):
+            return "bool"
+        if isinstance(x, int):
+            return "int"
+        if isinstance(x, float):
+            return "float"
+        if isinstance(x, str):
+            return "str"
+        return None
+
+    def ok(v: Any, want: str | None) -> bool:
+        if want is None:
+            return True
+        got = kind(v)
+        return got == want or (want == "float" and got == "int")
+
+    for sec_name in ("data", "measure", "open_ended", "extract", "probe", "localize"):
+        sec = getattr(cfg, sec_name)
+        for f in dataclasses.fields(sec):
+            default = f.default if f.default is not dataclasses.MISSING else (
+                f.default_factory() if f.default_factory is not dataclasses.MISSING else None)  # type: ignore[misc]
+            v = getattr(sec, f.name)
+            if default is None or v is None and default is None:
+                continue
+            if isinstance(default, list):
+                want = kind(default[0]) if default else None
+                need(isinstance(v, list) and all(ok(x, want) for x in v),
+                     f"{sec_name}.{f.name} must be a list of {want or 'values'}, got {v!r}")
+            else:
+                need(ok(v, kind(default)), f"{sec_name}.{f.name} must be {kind(default)}, got {v!r}")
+
+
 def validate(cfg: Config) -> None:
     def need(cond: bool, msg: str) -> None:
         if not cond:
@@ -298,7 +337,8 @@ def validate(cfg: Config) -> None:
 
     need(isinstance(cfg.name, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", cfg.name) is not None,
          "name must match [A-Za-z0-9][A-Za-z0-9._-]* (it becomes a directory under runs/)")
-    need(isinstance(cfg.seed, int), "seed must be an integer")
+    need(isinstance(cfg.seed, int) and not isinstance(cfg.seed, bool), "seed must be an integer")
+    _check_types(cfg, need)
     d = cfg.data
     need(d.n_real_per_category >= 3, "n_real_per_category must be >= 3 (target + 2 real competitors)")
     need(d.n_placebo_per_category >= 2, "n_placebo_per_category must be >= 2 (target substitute + distractor)")

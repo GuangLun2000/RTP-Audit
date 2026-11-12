@@ -117,6 +117,59 @@ def test_choose_layers_spec_argmax_and_alternative():
     assert c["alt_layer"] == 4 and c["spec_layer"] == 4
 
 
+class _Block:
+    pass
+
+
+def _fake_model(n_blocks=3, d=4):
+    import torch
+
+    class Block(torch.nn.Module):
+        def forward(self, x, cache_position=None):
+            return x + 0.0
+
+    class Inner(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.embed = torch.nn.Embedding(10, d)
+            self.layers = torch.nn.ModuleList([Block() for _ in range(n_blocks)])
+
+    class Model(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.model = Inner()
+
+        def get_input_embeddings(self):
+            return self.model.embed
+
+    return Model()
+
+
+def test_patching_once_prefix_only_and_valid_indices():
+    import torch
+
+    from rtp.patching import patched
+
+    m = _fake_model()
+    blk = m.model.layers[0]
+    x = torch.zeros(1, 5, 4)
+    vec = torch.ones(4)
+    with patched(m, {1: [(0, 3, vec)]}):
+        cached = blk(torch.zeros(1, 5, 4), cache_position=torch.arange(5, 10))  # a cached step: untouched
+        first = blk(x, cache_position=torch.arange(0, 5))                         # the prefix: patched
+        again = blk(torch.zeros(1, 5, 4), cache_position=torch.arange(0, 5))      # one-shot: untouched
+    assert float(cached.abs().sum()) == 0 and float(first[0, 3].sum()) == 4 and float(again.abs().sum()) == 0
+    with patched(m, {0: [(0, 1, vec)]}):  # index 0 (embeddings) has no cache position: one-shot still applies
+        e1 = m.model.embed(torch.zeros(1, 3, dtype=torch.long))
+        e2 = m.model.embed(torch.zeros(1, 3, dtype=torch.long))
+    assert torch.allclose(e1[0, 1], vec) and not torch.allclose(e2[0, 1], vec)
+    with pytest.raises(ValueError, match="post-final-norm"):
+        with patched(m, {3: [(0, 0, vec)]}):  # index n_blocks
+            pass
+    out = blk(x, cache_position=torch.arange(0, 5))
+    assert float(out.abs().sum()) == 0  # hooks removed after the context
+
+
 # --------------------------------------------------------------------------- integration
 @pytest.mark.integration
 def test_identity_transplant_reproduces_source_logits(smoke_lm):

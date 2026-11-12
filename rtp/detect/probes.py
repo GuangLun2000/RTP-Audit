@@ -28,10 +28,11 @@ with an isotropic random subspace (any data-derived subspace beats that on aniso
 * familiarity: entity-level AUC of the continuous popularity score for real brands vs placebos, vs the
   same AUC from a shuffled-label probe (lexical real/placebo differences let ANY probe separate them).
 Nulls: ``probe.n_null_k`` entity-level label shuffles per frame (the same shuffles at every layer). Per layer
-the permutation p is (1 + #null >= observed) / (1 + n); across layers, max-T adjusted p-values (each shuffle's
-largest standardised statistic over the eligible layers is the null of every layer) control the family-wise
-error, so picking the best layer after the fact does not inflate significance. A readiness check passes only
-if effect size and adjusted p hold at the SAME layer. Readiness checks ignore the embedding layer (index 0).
+the permutation p is (1 + #null >= observed) / (1 + n); across layers, max-T adjusted p-values (Westfall-Young:
+observed and shuffles standardised alike per layer, maximum over the eligible layers per arrangement) control
+the family-wise error, so picking the best layer after the fact does not inflate significance. A readiness
+check passes only if effect size and adjusted p hold at the SAME layer; a check with nothing to test is
+reported as "not testable", never as passed. Readiness checks ignore the embedding layer (index 0).
 """
 
 from __future__ import annotations
@@ -476,18 +477,31 @@ def _null_stats(name: str, obs: float, null: np.ndarray) -> dict[str, float]:
 
 
 def max_t_adjusted_p(obs: dict[int, float], null: dict[int, np.ndarray]) -> dict[int, float]:
-    """Max-T family-wise adjusted p per layer: each statistic is standardised by its own layer's null, and layer l's
-    adjusted p is (1 + #shuffles whose MAXIMUM standardised null over layers >= z_l) / (1 + n). Shuffle r is the
-    same label permutation at every layer. Layers with a degenerate null get NaN."""
-    keep = [lv for lv in obs if np.isfinite(obs[lv]) and lv in null and np.isfinite(null[lv]).all()
-            and len(null[lv]) > 1 and null[lv].std(ddof=1) > 0]
-    if not keep:
-        return {lv: float("nan") for lv in obs}
-    z_null = np.stack([(null[lv] - null[lv].mean()) / null[lv].std(ddof=1) for lv in keep]).max(axis=0)
+    """Max-T family-wise adjusted permutation p per layer (Westfall-Young), exact under exchangeability.
+
+    Per layer, the observed statistic and the n shuffled-label values form n + 1 equally likely arrangements
+    under H0; each layer's n + 1 values are standardised by their OWN mean and SD (observed included, so the
+    observed and the null replicates are treated alike), the maximum over layers is taken per arrangement,
+    and layer l's adjusted p = #(arrangements whose maximum >= z_obs_l) / (n + 1). Shuffle r is the same label
+    permutation at every layer. A layer whose n + 1 values are constant up to rounding (relative SD <= 1e-9)
+    carries no information: NaN, and it is left out of the maximum."""
     out = {lv: float("nan") for lv in obs}
-    for lv in keep:
-        z = (obs[lv] - null[lv].mean()) / null[lv].std(ddof=1)
-        out[lv] = float((1 + (z_null >= z).sum()) / (1 + len(z_null)))
+    keep, z = [], []
+    for lv in obs:
+        if not (np.isfinite(obs[lv]) and lv in null and len(null[lv]) >= 1 and np.isfinite(null[lv]).all()):
+            continue
+        v = np.concatenate([[obs[lv]], np.asarray(null[lv], dtype=float)])
+        sd = float(v.std(ddof=1)) if len(v) > 1 else 0.0
+        if sd <= 1e-9 * max(1.0, float(np.abs(v).mean())):
+            continue
+        keep.append(lv)
+        z.append((v - v.mean()) / sd)
+    if not keep:
+        return out
+    Z = np.stack(z)            # [layers, n + 1]; column 0 = observed
+    mx = Z.max(axis=0)         # per-arrangement maximum over layers
+    for k, lv in enumerate(keep):
+        out[lv] = float((mx >= Z[k, 0]).sum() / Z.shape[1])
     return out
 
 
@@ -569,8 +583,13 @@ def readiness_warnings(mdf: pd.DataFrame, bdf: pd.DataFrame, tdf: pd.DataFrame, 
             if not (gap.min(axis=1) >= BINDING_WARN).any():  # must hold in BOTH description orders
                 w.append(f"binding ({k_frame} frame): at no layer > 0 do probes read the target better than the other "
                          f"described brand by {BINDING_WARN} in both description orders")
+    t = tdf[(tdf["frame"] == k_frame) & tdf["layer"].isin(eligible)] if len(tdf) and "frame" in tdf else tdf
+    for col, what in (("k_capture", "K capture"), ("popularity_auc", "familiarity"),
+                      ("tier_within_cat_p", "real-brand transfer")):
+        if not len(t) or col not in t or not t[col].notna().any():  # never report "no warnings" for an untested check
+            w.append(f"{what}: not testable ({k_frame} frame, layers > 0): no choice activations, no real/placebo "
+                     f"pairs or too few real brands with a tier")
     if len(tdf) and "frame" in tdf:
-        t = tdf[(tdf["frame"] == k_frame) & tdf["layer"].isin(eligible)]
         if "k_capture" in t and len(t):
             pf = t["k_capture_p_fwer"] if "k_capture_p_fwer" in t else pd.Series(np.nan, index=t.index)
             ok = (t["k_capture"] >= CAPTURE_EXCESS_WARN * t["k_capture_null_mean"]) & (pf < FWER_ALPHA)

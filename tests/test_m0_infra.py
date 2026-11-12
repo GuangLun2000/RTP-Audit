@@ -27,7 +27,7 @@ def test_shipped_configs_load():
                                                "shampoo"}
     assert len(pilot.data.categories) == 18 and set(pilot.data.test_categories) <= set(pilot.data.categories)
     assert not set(pilot.probe.heldout_categories) & set(pilot.data.test_categories)
-    assert pilot.data.n_real_per_category == 18 and pilot.data.cards_per_cell == 4
+    assert pilot.data.n_real_per_category == 18 and pilot.data.cards_per_cell == pilot.data.n_placebo_per_category
     assert smoke.data.n_real_per_category == 3 and smoke.data.n_placebo_per_category == 3
     assert len(smoke.data.categories) == 2
 
@@ -367,17 +367,47 @@ def test_work_dir_ok_when_drive_mounted_or_elsewhere(monkeypatch, tmp_path):
 def test_pilot_test_split_is_brand_disjoint_from_dev():
     """Hard constraint 4 in spirit: thresholds developed on dev brands must not be 'tested' on the same brands in
     another category. Includes the open-ended-only Appendix A categories (always dev)."""
-    from rtp.data.catalogue import load_category_seeds, normalize_name
+    from rtp.data.catalogue import load_category_seeds, load_natural_negatives, normalize_name, select_real_brands
 
     pilot = load_config("configs/pilot.yaml")
     seeds = load_category_seeds(pilot.resolve(pilot.data.categories_file))
+    nn = load_natural_negatives(pilot.resolve(pilot.data.natural_negatives_file))
     n = pilot.data.n_real_per_category
 
     def names(brands):
-        return {normalize_name(x) for b in list(brands)[:n] for x in (b.name, *b.aliases)}
+        return {normalize_name(x) for b in brands for x in (b.name, *b.aliases)}
 
-    test = set().union(*(names(seeds.categories[c].brands) for c in pilot.data.test_categories))
-    dev = set().union(*(names(seeds.categories[c].brands) for c in pilot.data.categories
-                        if c not in pilot.data.test_categories))
+    def chosen(c):  # the brands the run actually uses (Appendix A natural negatives first)
+        return select_real_brands(seeds.categories[c], n, nn)
+
+    test = set().union(*(names(chosen(c)) for c in pilot.data.test_categories))
+    dev = set().union(*(names(chosen(c)) for c in pilot.data.categories if c not in pilot.data.test_categories))
     dev |= set().union(*(names(b) for b in seeds.open_ended_only.values()))
     assert not test & dev, sorted(test & dev)
+
+
+
+def test_localize_stride_identity_and_validation():
+    base = {"name": "lz", "data": {"categories": ["running shoe"], "n_real_per_category": 3,
+                                   "n_placebo_per_category": 3, "probe_entities_per_category": 1, "probe_templates": 1}}
+    a = config_from_dict({**base, "extract": {"layer_stride": 2}})
+    b = config_from_dict({**base, "extract": {"layer_stride": 4}})
+    c = config_from_dict({**base, "extract": {"layer_stride": 2}, "localize": {"layer_stride": 2}})
+    h = lambda cfg: cfg.stage_hash("localize", "dummy/model", "dev")  # noqa: E731
+    assert h(a) != h(b) and h(a) == h(c)  # the effective stride is the identity, not the literal setting
+    with pytest.raises(ConfigError, match="multiple of extract"):
+        config_from_dict({**base, "extract": {"layer_stride": 4}, "localize": {"layer_stride": 6}})
+    with pytest.raises(ConfigError, match="n_null_k"):
+        config_from_dict({**base, "probe": {"n_null_k": 19}})
+    with pytest.raises(ConfigError, match="must be int"):
+        config_from_dict({**base, "extract": {"layer_stride": True}})
+
+
+def test_card_set_balance_warning():
+    from rtp.data.build import card_set_balance_warning
+
+    base = {"name": "cb", "data": {"categories": ["running shoe"], "n_real_per_category": 3,
+                                   "n_placebo_per_category": 3, "probe_entities_per_category": 1, "probe_templates": 1}}
+    assert card_set_balance_warning(config_from_dict({**base, "data": {**base["data"], "cards_per_cell": 2}}))
+    assert card_set_balance_warning(config_from_dict({**base, "data": {**base["data"], "cards_per_cell": 3}})) is None
+    assert card_set_balance_warning(load_config("configs/pilot.yaml")) is None

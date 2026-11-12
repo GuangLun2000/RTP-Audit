@@ -247,7 +247,8 @@ def test_readiness_ignores_embedding_layer_and_uses_shuffled_null():
          "popularity_auc": 0.80, "popularity_auc_null_mean": 0.79, "popularity_auc_p_fwer": 0.01}])
     w = readiness_warnings(pd.DataFrame(), pd.DataFrame(), t, "choice", [0, 4])
     assert any(x.startswith("K capture") for x in w) and any(x.startswith("familiarity") for x in w)
-    big = t.assign(k_capture=[0.9, 0.9], popularity_auc=[0.99, 0.99])
+    big = t.assign(k_capture=[0.9, 0.9], popularity_auc=[0.99, 0.99], tier_within_cat_rho=[0.5, 0.5],
+                   tier_within_cat_p=[0.001, 0.001])
     assert not readiness_warnings(pd.DataFrame(), pd.DataFrame(), big, "choice", [0, 4])
     weak = big.assign(k_capture_p_fwer=0.2, popularity_auc_p_fwer=0.2)  # large but not beyond the null
     assert len(readiness_warnings(pd.DataFrame(), pd.DataFrame(), weak, "choice", [0, 4])) == 2
@@ -257,7 +258,8 @@ def test_readiness_ignores_embedding_layer_and_uses_shuffled_null():
         {"frame": "choice", "layer": 4, "k_capture": 0.299, "k_capture_null_mean": 0.290, "k_capture_p_fwer": 0.01}])
     assert any(x.startswith("K capture") for x in readiness_warnings(pd.DataFrame(), pd.DataFrame(), split,
                                                                       "choice", [0, 2, 4]))
-    assert readiness_warnings(pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), "choice", [0, 4]) == []  # no crash
+    assert all("not testable" in x for x in readiness_warnings(pd.DataFrame(), pd.DataFrame(), pd.DataFrame(),
+                                                               "choice", [0, 4]))  # no crash
 
 
 def test_max_over_layers_p():
@@ -289,3 +291,24 @@ def test_within_category_permutation_p_independent_of_hash_seed():
     outs = {subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True,
                            env={**__import__("os").environ, "PYTHONHASHSEED": str(h)}).stdout for h in (1, 2, 3)}
     assert len(outs) == 1
+
+
+
+def test_max_t_is_exact_under_h0_and_handles_degenerate_layers():
+    from rtp.detect.probes import max_over_layers_p, max_t_adjusted_p
+
+    rng = np.random.default_rng(1)
+    reps, hits = 2000, 0
+    for _ in range(reps):  # observed exchangeable with the shuffles at every layer: P(p <= 0.05) = 5/100
+        v = rng.standard_normal((6, 100)) * rng.uniform(0.1, 3, (6, 1))
+        hits += max_over_layers_p({k: v[k, 0] for k in range(6)}, {k: v[k, 1:] for k in range(6)}) <= 0.05
+    assert abs(hits / reps - 0.05) < 0.015
+    flat = {2: 0.3 + 1e-16, 4: 0.5}
+    null = {2: np.full(99, 0.3), 4: rng.normal(0.3, 0.01, 99)}
+    adj = max_t_adjusted_p(flat, null)
+    assert np.isnan(adj[2]) and adj[4] == pytest.approx(0.01)  # a layer constant up to rounding carries no information
+
+
+def test_readiness_reports_untestable_checks():
+    w = readiness_warnings(pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), "choice", [0, 4])
+    assert sum("not testable" in x for x in w) == 3  # never "no readiness warnings" when nothing was tested

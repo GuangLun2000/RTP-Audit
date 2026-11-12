@@ -155,6 +155,27 @@ def test_parse_final_answer():
         assert parse_final_answer(text, opts) == want, text
 
 
+def test_parser_regressions():
+    from rtp.measure.choice import parse_answer, parse_letter
+
+    o = [{"label": L, "name": n} for L, n in zip("ABCD", ["Nike", "L'Oréal", "A&W", "The North Face"])]
+    assert parse_final_answer("Comparing A and C, I recommend Option B.", o) == "B"  # capitalised Option after a cue
+    assert parse_final_answer("A&W is the best soda here.", o) == "C"  # the A of A&W is not a letter
+    assert parse_final_answer("I recommend L'Oreal", o) == "B" and parse_answer("Loreal", o) == "B"  # accents
+    assert parse_answer("A&W", o) == "C" and parse_answer("The best choice is", o) is None
+    assert parse_answer("The North", o) == "D"  # a truncated name is still read
+    assert parse_letter("A is the best choice") == "A" and parse_letter("A good choice") is None
+    assert parse_letter("A look at the reviews") is None  # "look" is a noun after the article
+    o2 = [{"label": L, "name": n} for L, n in zip("ABCD", ["Bevodel", "Ford", "Allswell", "Topo Athletic"])]
+    assert parse_answer("Bev", o2) == "A" and parse_answer("For an electric car", o2) is None
+    assert parse_answer("All four options are", o2) is None and parse_answer("Top pick here is", o2) is None
+    o3 = [{"label": L, "name": n} for L, n in zip("ABCD", ["Sharp", "Element", "Insignia", "TCL"])]
+    cs = {"Sharp", "Element", "Insignia"}  # catalogue match_case: ordinary words match as written only
+    assert parse_final_answer("D offers a sharp picture and good value", o3, cs) == "D"
+    assert parse_final_answer("I recommend SHARP", o3, cs) == "A"
+    assert parse_final_answer("D offers a sharp picture and good value", o3) is None  # without the flags
+
+
 def test_consistency_modes_and_chance():
     s = pd.DataFrame({"gen_text": ["x"] * 6 + [None],
                       "gen_mode": ["immediate"] * 3 + ["deferred"] * 3 + [None],
@@ -237,6 +258,47 @@ def test_matched_card_sets_share_cards_across_cells():
                 if o["name"] == comp:
                     o["price"] = o["price"] + 1
     with pytest.raises(SchemaError, match="card set .* field 'price'"):
+        validate_choice_items(bad)
+
+
+def test_card_set_substitutes_rotate_and_se_units_are_substitutes():
+    from rtp.measure.name_effect import entity_evidence_table, items_meta, paired_name_effect, rotation_average
+
+    cfg = config_from_dict({"name": "rot", "seed": 4, "data": {
+        "categories": ["running shoe"], "n_real_per_category": 3, "n_placebo_per_category": 3, "cards_per_cell": 3,
+        "e0_pairs_per_substitute": 2, "evidence_levels": [0, 1, 4], "handicaps": [0, 2],
+        "probe_entities_per_category": 1, "probe_templates": 1}})
+    items = generate(cfg)["choice"]
+    subs: dict[str, set] = {}
+    use: dict[str, int] = {}
+    for it in items:
+        if it["evidence_level"] >= 1 and it["rotation"] == 0 and not it["target_is_placebo"]:
+            subs.setdefault(it["pair_entity"], set()).add(it["placebo_substitute"])
+            if it["evidence_level"] == 1:
+                use[it["placebo_substitute"]] = use.get(it["placebo_substitute"], 0) + 1
+    assert all(len(v) == 3 for v in subs.values())  # every target sees every placebo at evidence >= 1
+    assert set(use.values()) == {3}  # and every placebo serves equally often
+    rng = np.random.default_rng(0)
+    scores = pd.DataFrame({"item_id": [it["item_id"] for it in items], "s_target": rng.normal(size=len(items))})
+    t = entity_evidence_table(paired_name_effect(rotation_average(scores, items_meta(items))))
+    assert set(t["n_e0"]) == {3} and set(t["n_e4"]) == {3}  # units = substitutes, not 6 pairs / 6 cells
+
+
+def test_card_set_check_compares_target_rating_within_a_handicap():
+    import copy
+
+    cfg = config_from_dict({"name": "tr", "seed": 3, "data": {
+        "categories": ["running shoe"], "n_real_per_category": 3, "n_placebo_per_category": 3, "cards_per_cell": 3,
+        "probe_entities_per_category": 1, "probe_templates": 1}})
+    items = generate(cfg)["choice"]
+    pid = next(it["pair_id"] for it in items if it["evidence_level"] == 4 and it["handicap"] == 0)
+    bad = copy.deepcopy(items)
+    for it in bad:  # handicap applied twice in ONE cell: consistent within the pair, wrong for the card set
+        if it["pair_id"] == pid:
+            for o in it["options"]:
+                if o["role"] == "target":
+                    o["rating"] = round(o["rating"] - 2.0, 1)
+    with pytest.raises(SchemaError, match="field 'rating'"):
         validate_choice_items(bad)
 
 
