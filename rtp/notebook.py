@@ -27,6 +27,8 @@ def _env(extra: dict[str, str] | None = None) -> dict[str, str]:
     env = dict(os.environ)
     env.setdefault("PYTHONUNBUFFERED", "1")
     env.setdefault("RTP_PROGRESS", "log")  # one line per ~10% with ETA, no carriage-return bars
+    env.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")  # download bars would print one line per refresh
+    env.setdefault("TQDM_DISABLE", "1")
     env.update(extra or {})
     return env
 
@@ -48,8 +50,24 @@ def stream(cmd: list[str], env: dict[str, str] | None = None, label: str | None 
     secs = time.time() - t0
     status = "✅ ok" if rc == 0 else f"❌ FAILED (exit {rc})"
     print(f"{status}  {label}  [{secs:.0f}s, {n_warn} warnings]", flush=True)
-    HISTORY.append({"command": label, "exit_code": rc, "seconds": round(secs, 1), "warnings": n_warn})
+    _record({"command": label, "exit_code": rc, "seconds": round(secs, 1), "warnings": n_warn})
     return rc
+
+
+def _record(entry: dict[str, Any]) -> None:
+    """Keep the session history in memory and on Drive ($RTP_WORK_DIR/notebook_history.jsonl) for `feedback`."""
+    import json
+
+    entry = {"time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), **entry}
+    HISTORY.append(entry)
+    try:
+        from rtp.events import redact
+        from rtp.paths import work_dir
+
+        with open(work_dir() / "notebook_history.jsonl", "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(redact(entry), ensure_ascii=False) + "\n")
+    except Exception:  # noqa: BLE001 - history must never break a run
+        pass
 
 
 def run(*args: str, strict: bool = False, env: dict[str, str] | None = None) -> int:
@@ -75,8 +93,8 @@ def pytest(config: str | None = None, require_integration: bool = True) -> int:
     if out_path is not None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(text, encoding="utf-8")
-    HISTORY.append({"command": "pytest", "exit_code": proc.returncode, "seconds": round(time.time() - t0, 1),
-                    "warnings": 0})
+    _record({"command": "pytest", "exit_code": proc.returncode, "seconds": round(time.time() - t0, 1),
+             "warnings": 0})
     print(("✅ tests passed" if proc.returncode == 0 else f"❌ tests FAILED (exit {proc.returncode})"), flush=True)
     return proc.returncode
 
@@ -101,7 +119,7 @@ def gpu_overrides() -> list[str]:
     if gib >= 120:  # H200 (141 GB)
         sizes = {"measure.max_batch_size": 128, "measure.max_batch_tokens": 65536,
                  "extract.max_batch_size": 64, "extract.max_batch_tokens": 32768}
-    elif gib >= 80:  # 96 GB class (e.g. G4 / RTX PRO 6000), 80 GB A100/H100
+    elif gib >= 76:  # 96 GB class (e.g. G4 / RTX PRO 6000) and 80 GB A100/H100 (~79 GiB usable)
         sizes = {"measure.max_batch_size": 96, "measure.max_batch_tokens": 49152,
                  "extract.max_batch_size": 48, "extract.max_batch_tokens": 24576}
     else:

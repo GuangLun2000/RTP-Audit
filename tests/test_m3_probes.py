@@ -5,13 +5,14 @@ from __future__ import annotations
 import inspect
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from rtp.config import config_from_dict
 from rtp.data.build import generate
 from rtp.data.probe_items import ATTRIBUTES, N_LEVELS
 from rtp.detect.probes import (RidgeSVD, build_k, capture_ratio, fit_frame_layer, grouped_folds,
-                               permuted_labels, random_capture)
+                               permuted_labels, random_capture, readiness_warnings)
 
 
 # --------------------------------------------------------------------------- synthetic activations
@@ -75,7 +76,8 @@ def test_k_recovers_embedded_attribute_subspace():
     """Spec §10: embed known directions in synthetic activations and check that K recovers them."""
     X, ents, labels, dirs = synthetic(noise=0.2)
     fitted = fit_frame_layer(X, ents, labels, [0.1, 1.0, 10.0], n_folds=5, seed=0)
-    K = build_k(X, labels, fitted, k_rank=16)
+    K, n_dirs = build_k(X, ents, labels, fitted["full"], {a: fitted["attrs"][a]["W"] for a in ATTRIBUTES}, k_rank=18)
+    assert n_dirs >= 18
     assert np.allclose(K.T @ K, np.eye(K.shape[1]), atol=1e-8)
     # the contrasts that carry attribute information (level differences) must lie inside K
     for a in ATTRIBUTES:
@@ -85,6 +87,53 @@ def test_k_recovers_embedded_attribute_subspace():
     # and a random direction is mostly outside K
     r = np.random.default_rng(9).standard_normal(X.shape[1])
     assert np.linalg.norm(K.T @ r) / np.linalg.norm(r) < 0.8
+
+
+def test_k_beats_shuffled_label_k_on_anisotropic_activations():
+    """Real activations are anisotropic: per-item nuisance variance and large per-entity identity variance in
+    directions unrelated to the attributes. K must still recover the attribute contrasts, and must capture an
+    attribute-driven difference clearly better than a K built the same way from shuffled labels (the null)."""
+    from rtp.detect.probes import shuffled_fits
+
+    rng = np.random.default_rng(3)
+    X, ents, labels, dirs = synthetic(n_entities=80, per_entity=6, d=64, noise=0.3, seed=3)
+    q_id, _ = np.linalg.qr(rng.standard_normal((64, 10)))
+    ent_id = {e: q_id @ rng.standard_normal(10) for e in set(ents.tolist())}
+    X = 0.5 * X + np.stack([6.0 * ent_id[e] for e in ents]) + 3.0 * rng.standard_normal((len(X), 1)) * \
+        rng.standard_normal(64)
+    fitted = fit_frame_layer(X, ents, labels, [1.0, 10.0, 100.0], n_folds=5, seed=0)
+    full = fitted["full"]
+    K, _ = build_k(X, ents, labels, full, {a: fitted["attrs"][a]["W"] for a in ATTRIBUTES}, k_rank=18)
+    v = dirs["quality"][4] - dirs["quality"][0]
+    assert np.linalg.norm(K.T @ v) / np.linalg.norm(v) > 0.9
+    D = np.stack([v + 0.2 * rng.standard_normal(64) for _ in range(40)])  # "real minus placebo" = knowledge
+    nulls = [build_k(X, ents, lab, full, {a: f[a][0] for a in ATTRIBUTES}, 18)[0]
+             for lab, f in shuffled_fits(X, ents, labels, fitted, 3, seed=0)]
+    assert capture_ratio(D, K) > 1.5 * np.mean([capture_ratio(D, k) for k in nulls])
+
+
+def test_subspace_basis_spans_inputs_despite_dependent_directions():
+    from rtp.detect.probes import subspace_basis
+
+    rng = np.random.default_rng(0)
+    a, b = rng.standard_normal(10), rng.standard_normal(10)
+    c = rng.standard_normal(10)
+    K, n = subspace_basis([a, b, a + b, c], k_rank=5)  # a + b is dependent and must not cost c its span
+    assert n == 3 and K.shape == (10, 3)
+    for v in (a, b, c):
+        assert np.linalg.norm(K.T @ v) / np.linalg.norm(v) > 1 - 1e-9
+
+
+def test_within_category_spearman_ignores_category_level_differences():
+    from rtp.detect.probes import within_category_spearman
+
+    cats = np.array(["car"] * 6 + ["snack"] * 6)
+    truth = np.array([2, 2, 2, 1, 1, 1, 0, 0, 0, 1, 1, 1], dtype=float)  # cars pricier than snacks
+    category_only = np.array([5.0] * 6 + [0.0] * 6) + np.random.default_rng(0).normal(0, 0.01, 12)
+    rho, p = within_category_spearman(category_only, truth, cats, 300, seed=0)
+    assert p > 0.05  # pooled Spearman would be ~0.8 here
+    rho2, p2 = within_category_spearman(truth + np.random.default_rng(1).normal(0, 0.01, 12), truth, cats, 300, 0)
+    assert rho2 > 0.8 and p2 < 0.05  # ties in the tiers cap the rank correlation below 1
 
 
 def test_capture_ratio():
@@ -110,16 +159,23 @@ def test_probe_frames_and_controls(probes):
 
     kinds = Counter((p["frame"], p["control"]) for p in probes)
     assert kinds == {("background", None): 8, ("choice", None): 8, ("background", "two_brand"): 4,
-                     ("background", "undescribed"): 4}
+                     ("background", "undescribed"): 4, ("choice", "two_brand"): 4, ("choice", "undescribed"): 4}
+    orders = Counter(p["other_first"] for p in probes if p["control"] == "two_brand")
+    assert orders[True] == orders[False]  # counterbalanced description order
     for p in probes:
         s, t = p["name_char_span"]
         assert p["text"][s:t] == p["entity"] and p["text"].rfind(p["entity"]) == s
         if p["frame"] == "choice":
             assert "Here are four options:" in p["text"] and f". {p['entity']}\n" in p["text"]
+            if p["control"]:
+                assert f". {p['other_entity']}\n" in p["text"]  # both entities are options
         if p["control"] == "two_brand":
             assert p["other_entity"] in p["text"] and p["other_attributes"] is not None
         if p["control"] == "undescribed":
             assert p["text"].count(p["entity"]) == 1 and p["text"].startswith(f"Background: {p['other_entity']}")
+        if p["control"] == "two_brand" and p["frame"] == "background":
+            first = p["other_entity"] if p["other_first"] else p["entity"]
+            assert p["text"].startswith(f"Background: {first} is")
 
 
 def test_detect_functions_take_one_model_path():
@@ -135,8 +191,8 @@ def test_detect_functions_take_one_model_path():
 def test_selected_layers_and_target_span():
     from rtp.detect.activations import selected_layers, target_name_span
 
-    assert selected_layers(24, 2) == list(range(0, 25, 2))
-    assert selected_layers(5, 2) == [0, 2, 4, 5]
+    assert selected_layers(24, 2) == list(range(0, 24, 2))  # index 24 = post-final-norm: excluded
+    assert selected_layers(5, 2) == [0, 2, 4]
     item = {"item_id": "x", "target_label": "C", "target_entity": "Nike",
             "prompt": "I'm shopping.\n\nA. Asics\nB. Nikon\nC. Nike\nD. Hoka\n\nWhich?"}
     s, t = target_name_span(item)
@@ -159,9 +215,9 @@ def test_extract_and_probe_on_smoke_model(smoke_lm, work_dir, monkeypatch):
     build_data(cfg)
     edir = run_extract(cfg, smoke_lm.model_id)
     meta = io.read_json(edir / "layers.json")
-    assert meta["layers"] == [0, 6, 12, 18, 24]
+    assert meta["layers"] == [0, 6, 12, 18]
     idx, acts = load_activations(edir, "probe")
-    assert acts.dtype == np.float16 and acts.shape == (len(idx), 5, smoke_lm.model.config.hidden_size)
+    assert acts.dtype == np.float16 and acts.shape == (len(idx), 4, smoke_lm.model.config.hidden_size)
     assert len(list((edir / "probe").glob("*.done"))) == -(-len(idx) // 10)
     # the located token is the end of the read name
     p = load_probe_items(cfg, "dev")[0]
@@ -176,5 +232,18 @@ def test_extract_and_probe_on_smoke_model(smoke_lm, work_dir, monkeypatch):
     pdir = run_probe(cfg, smoke_lm.model_id)
     k = np.load(pdir / "K_choice_L12.npy")
     assert k.shape[0] == smoke_lm.model.config.hidden_size and k.shape[1] <= 4
+    t = pd.read_parquet(pdir / "transfer.parquet")
+    assert {"shuffled_k_capture_mean", "popularity_auc_shuffled"} <= set(t.columns)
     assert np.allclose(k.T @ k, np.eye(k.shape[1]), atol=1e-4)
     assert io.is_done(pdir) and (pdir / "summary.md").read_text().count("Readiness for M4") == 1
+
+
+def test_readiness_ignores_embedding_layer_and_uses_shuffled_null():
+    t = pd.DataFrame([
+        {"frame": "choice", "layer": 0, "k_capture": 0.9, "shuffled_k_capture_mean": 0.1, "shuffled_k_capture_sd": 0.01,
+         "popularity_auc": 0.99, "popularity_auc_shuffled": 0.5},
+        {"frame": "choice", "layer": 4, "k_capture": 0.3, "shuffled_k_capture_mean": 0.29,
+         "shuffled_k_capture_sd": 0.02, "popularity_auc": 0.80, "popularity_auc_shuffled": 0.79}])
+    w = readiness_warnings(pd.DataFrame(), pd.DataFrame(), t, "choice", [0, 4])
+    assert any(x.startswith("K capture") for x in w) and any(x.startswith("familiarity") for x in w)
+    assert readiness_warnings(pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), "choice", [0, 4]) == []  # no crash

@@ -82,14 +82,18 @@ def run_smoke(config_path: str = "configs/smoke.yaml", resume: bool = False, ove
     log.info("smoke: config=%s model=%s hardware=%s", cfg.name, model_id, hw)
 
     rdir = run_dir(cfg.name)
+    bookkeeping = {"events.jsonl", "status.md", "doctor.json", "pytest_last.txt", "feedback", "report.md"}
+    if rdir.exists() and not (rdir / SMOKE_MARKER).exists() and {p.name for p in rdir.iterdir()} <= bookkeeping:
+        (rdir / SMOKE_MARKER).write_text("created by `python -m rtp.cli smoke`; smoke may delete this directory\n")
     if rdir.exists() and not (rdir / SMOKE_MARKER).exists():
         # never adopt (and later delete) a run dir that smoke did not create, not even with --resume
         raise SmokeFailure(
             f"refusing to use {rdir}: it was not created by `smoke` (no {SMOKE_MARKER} marker) and may hold real "
             f"results. Use a config with another name (e.g. configs/smoke.yaml) or remove the directory yourself.")
     if not resume and rdir.exists():
-        # a model results dir is one that holds stage dirs (stage_meta.json); data/, feedback/ etc. are not
-        foreign = sorted({m.parent.parent.name for m in rdir.glob("*/*/stage_meta.json")} - {model_slug(model_id)})
+        # any directory other than smoke's own data/model dirs and bookkeeping may hold real results: never delete
+        foreign = sorted(d.name for d in rdir.iterdir()
+                         if d.is_dir() and d.name not in ("data", "feedback", model_slug(model_id)))
         if rdir.resolve().parent != (work_dir() / "runs").resolve() or foreign:
             raise SmokeFailure(f"refusing to delete {rdir}: unexpected location or results of other models {foreign}")
         log.info("smoke: removing previous smoke outputs in %s", rdir)
@@ -145,7 +149,7 @@ def run_smoke(config_path: str = "configs/smoke.yaml", resume: bool = False, ove
     log.info("SMOKE PASSED in %.1fs on %s", total, hw)
     for name, sec in timings.items():
         log.info("  %-16s %7.1fs", name, sec)
-    log.info("letter-argmax vs greedy generation agreement: %s on %d checked items%s",
+    log.info("free-answer consistency (greedy answer WITHOUT prefill vs scored letter argmax): %s on %d items%s",
              f"{cons['agreement']:.1%}" if cons["n_checked"] else "n/a", cons["n_checked"],
              "  (WARNING: below threshold)" if info.get("consistency_warning") else "")
     log.info("outputs: %s | %s | %s", mdir, odir, rpath)

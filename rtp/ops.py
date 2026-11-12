@@ -49,7 +49,9 @@ def _warnings_of(kind: str, info: dict[str, Any]) -> list[str]:
     return w
 
 
-def collect_status(cfg: Config) -> list[dict[str, Any]]:
+def collect_status(cfg: Config, unseal: bool = False) -> list[dict[str, Any]]:
+    """All stages with their state. Results (warnings) of test-split stages are hidden unless ``unseal``
+    (hard constraint 4: method development must not see sealed outcomes)."""
     rdir = run_dir(cfg.name)
     rows: list[dict[str, Any]] = []
     ddir = data_dir(cfg.name)
@@ -61,7 +63,7 @@ def collect_status(cfg: Config) -> list[dict[str, Any]]:
     else:
         state = "partial" if ddir.exists() else "not started"
     rows.append({"model": "(data)", "stage": "build-data", "state": state, "warnings": [], "elapsed_s": None,
-                 "path": str(ddir)})
+                 "path": str(ddir), "sealed": False})
     seen = set()
     for meta_path in sorted(rdir.glob(f"*/*/{io.STAGE_META}")):
         sdir = meta_path.parent
@@ -75,19 +77,24 @@ def collect_status(cfg: Config) -> list[dict[str, Any]]:
             expected = stages.stage_hash(cfg, kind, model_id, split, meta.get("prompt_mode", "auto"))
         except Exception:  # noqa: BLE001 - e.g. data missing: cannot verify
             expected = None
+        sealed = split == "test" and not unseal
         info = io.read_json(sdir / io.DONE_FILE) if io.is_done(sdir) else {}
-        n_shards = len(list(sdir.glob("shards*/*.done"))) + len(list(sdir.glob("*/shard_*.done")))
+        n_shards = len(stages.finished_shards(sdir))
+        current = meta.get("stage_hash") == expected
         if io.is_done(sdir):
-            state = "done" if meta.get("stage_hash") == expected else "stale"
-        else:
+            state = "done" if current else "stale"
+        elif current:
             state = f"partial ({n_shards} shards done)"
-        rows.append({"model": model_id, "stage": sdir.name, "state": state, "warnings": _warnings_of(kind, info),
-                     "elapsed_s": info.get("elapsed_s"), "path": str(sdir)})
+        else:
+            state = f"partial+stale ({n_shards} shards; other code/inputs/settings: re-run with --force)"
+        rows.append({"model": model_id, "stage": sdir.name, "state": state,
+                     "warnings": ["(sealed: pass --unseal to show)"] if sealed and info else _warnings_of(kind, info),
+                     "elapsed_s": info.get("elapsed_s"), "path": str(sdir), "sealed": sealed})
     for m in cfg.models:
         for st in PIPELINE:
             if (m, st) not in seen:
                 rows.append({"model": m, "stage": st, "state": "not started", "warnings": [], "elapsed_s": None,
-                             "path": ""})
+                             "path": "", "sealed": False})
     return rows
 
 
@@ -100,8 +107,8 @@ def status_markdown(rows: list[dict[str, Any]]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def run_status(cfg: Config) -> list[dict[str, Any]]:
-    rows = collect_status(cfg)
+def run_status(cfg: Config, unseal: bool = False) -> list[dict[str, Any]]:
+    rows = collect_status(cfg, unseal=unseal)
     text = status_markdown(rows)
     io.atomic_write_text(run_dir(cfg.name) / "status.md", text)
     print(text)
@@ -196,10 +203,15 @@ def run_doctor(cfg: Config | None = None, check_hub: bool = True) -> int:
                 spec = registry.get_model_spec(m)
                 try:
                     registry.validate_repo_id(m, "model")
-                    _check(res, f"hub:{m}", "PASS", "accessible" + (" (gated: licence accepted)" if spec and spec.gated
-                                                                   else ""))
+                    if spec is not None and spec.gated:  # metadata is public; check that FILES are accessible
+                        from huggingface_hub import HfApi
+
+                        HfApi().auth_check(m)
+                    _check(res, f"hub:{m}", "PASS", "accessible" + (" (gated: token and licence OK)"
+                                                                   if spec and spec.gated else ""))
                 except Exception as exc:  # noqa: BLE001
-                    _check(res, f"hub:{m}", "FAIL", str(exc).splitlines()[0][:200])
+                    detail = registry.gated_message(m) if spec and spec.gated else str(exc).splitlines()[0][:200]
+                    _check(res, f"hub:{m}", "FAIL", detail)
     width = max(len(r["check"]) for r in res)
     for r in res:
         print(f"{r['level']:4s}  {r['check']:<{width}}  {r['detail']}")
@@ -241,10 +253,10 @@ def _rules(rows, errors) -> list[str]:
         out.append("Fix every error below first. Reproduce it locally with `python -m rtp.cli smoke` or a minimal "
                    "config, add a regression test in tests/, then re-run only the failed command on Colab (finished "
                    "stages whose code and inputs did not change are reused).")
-    if any(r["state"] == "stale" for r in rows):
+    if any(r["state"] == "stale" or r["state"].startswith("partial+stale") for r in rows):
         out.append("Some stages are stale (other code/data/settings than the current checkout): re-run them with "
                    "--force, or check out the commit they were built with.")
-    if any(r["state"].startswith("partial") for r in rows):
+    if any(r["state"].startswith("partial (") for r in rows):
         out.append("Some stages are partial: re-run the same command to resume (finished shards are kept).")
     text = " ".join(w for r in rows for w in r["warnings"]).lower()
     for key, advice in SUGGESTIONS:
@@ -262,14 +274,47 @@ def _tail(path: Path, n: int) -> str:
     return "\n".join(lines[-n:])
 
 
-def build_feedback(cfg: Config, tail: int = 60) -> Path:
+def _unresolved_errors(evs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Errors not followed (in log order) by a successful run of the same stage and model."""
+    out = []
+    for i, err in enumerate(evs):
+        if err.get("kind") != "error":
+            continue
+        fixed = any(e.get("kind") == "done" and e.get("data", {}).get("exit_code") == 0
+                    and e.get("stage") == err.get("stage") and e.get("model") == err.get("model") for e in evs[i + 1:])
+        if not fixed:
+            out.append(err)
+    return out
+
+
+def _never_finished(evs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """'start' events with no later done/error from the same command (killed, OOM-killed or disconnected)."""
+    out = []
+    for i, e in enumerate(evs):
+        if e.get("kind") != "start":
+            continue
+        argv = e.get("data", {}).get("argv")
+        if not any(f.get("kind") in ("done", "error") and f.get("data", {}).get("argv") == argv for f in evs[i + 1:]):
+            out.append(e)
+    return out
+
+
+def build_feedback(cfg: Config, tail: int = 60, unseal: bool = False) -> Path:
+    from rtp.paths import work_dir
     from rtp.provenance import environment
 
     rdir = run_dir(cfg.name)
     ts = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    rows = collect_status(cfg)
+    rows = collect_status(cfg, unseal=unseal)
     evs = events.read(rdir / "events.jsonl")
-    errors = [e for e in evs if e.get("kind") == "error"]
+    smoke_evs = []
+    for f in sorted(rdir.parent.glob("*.smoke_events.jsonl")):
+        smoke_evs.extend(events.read(f))
+    all_errors = [e for e in evs + smoke_evs if e.get("kind") == "error"]
+    errors = _unresolved_errors(evs) + _unresolved_errors(smoke_evs)
+    unfinished = _never_finished(evs + smoke_evs)
+    hist_path = work_dir() / "notebook_history.jsonl"
+    history = events.read(hist_path)[-40:]
     warn_counts: dict[tuple, int] = {}
     for e in evs:
         if e.get("kind") in ("warning", "log_error"):
@@ -279,15 +324,24 @@ def build_feedback(cfg: Config, tail: int = 60) -> Path:
     lines = [f"# Feedback bundle: {cfg.name} ({ts})", "",
              "> For the coding agent: read CLAUDE.md and docs/AGENT_LOOP.md first, then this file. Fix errors with a "
              "regression test each; treat method-level warnings as findings for the PI, not as bugs.", "",
-             "## Environment", "", "```json", json.dumps(doctor["environment"] if doctor else environment(), indent=1),
-             "```"]
+             "## Environment (now)", "", "```json", json.dumps(environment(), indent=1), "```"]
+    if not unseal:
+        lines += ["", "_Test-split results are sealed and omitted (pass --unseal to include them)._"]
     if doctor:
         bad = [c for c in doctor["checks"] if c["level"] != "PASS"]
-        lines += ["", "Doctor (non-PASS checks):", ""] + [f"- {c['level']} {c['check']}: {c['detail']}" for c in bad] \
-            + (["- all checks PASS"] if not bad else [])
+        lines += ["", f"Doctor at {doctor.get('time')} (non-PASS checks):", ""] + \
+            [f"- {c['level']} {c['check']}: {c['detail']}" for c in bad] + (["- all checks PASS"] if not bad else [])
+    if history:
+        lines += ["", "## Notebook session (latest commands)", ""] + \
+            [f"- {'✅' if h.get('exit_code') == 0 else '❌'} `{h.get('command')}` exit {h.get('exit_code')}, "
+             f"{h.get('seconds')}s, {h.get('warnings')} warnings ({h.get('time')})" for h in history]
+    if unfinished:
+        lines += ["", "## Commands that never finished (killed, out of host memory, or disconnected?)", ""] + \
+            [f"- {e.get('time')} `{e.get('message')}`" for e in unfinished[-20:]]
     lines += ["", "## Stage status", "", status_markdown(rows), "## Suggested next actions", ""]
     lines += [f"{i + 1}. {s}" for i, s in enumerate(_rules(rows, errors))]
-    lines += ["", f"## Errors ({len(errors)})", ""]
+    lines += ["", f"## Errors ({len(errors)} unresolved; {len(all_errors) - len(errors)} resolved by a later "
+                  f"successful run and omitted)", ""]
     for e in errors[-20:]:
         lines += [f"### {e.get('time')} `{e.get('message', '')[:200]}`", "",
                   f"- stage: {e.get('stage')}; model: {e.get('model')}; argv: {e.get('data', {}).get('argv')}", "",
@@ -298,17 +352,22 @@ def build_feedback(cfg: Config, tail: int = 60) -> Path:
     lines += ["", "## Key results", ""]
     for r in rows:
         p = Path(r["path"]) if r["path"] else None
+        if r.get("sealed"):
+            continue
         if p and io.is_done(p) and r["stage"] != "build-data":
             info = io.read_json(p / io.DONE_FILE)
             keep = {k: v for k, v in info.items() if k not in ("finished_with", "ladder_variants")}
             lines.append(f"- **{r['model']} / {r['stage']}**: `{json.dumps(keep, default=str)[:900]}`")
     lines += ["", "## Log tails of failed or partial stages", ""]
     for r in rows:
-        if r["path"] and (r["state"].startswith("partial") or r["state"] == "stale"):
+        if r["path"] and not r.get("sealed") and (r["state"].startswith("partial") or r["state"] == "stale"):
             lines += [f"### {r['model']} / {r['stage']} ({r['state']})", "", "```",
                       _tail(Path(r["path"]) / "log.txt", tail), "```", ""]
     pt = rdir / "pytest_last.txt"
     lines += ["## Last pytest run", "", "```", _tail(pt, 40) or "(no pytest output saved; run nb.pytest())", "```"]
+    from rtp.log import redact_text
+
+    lines = [redact_text(x) for x in lines]  # second layer: log tails and pytest output
     fdir = rdir / "feedback"
     md_path = fdir / f"feedback_{ts}.md"
     io.atomic_write_text(md_path, "\n".join(lines) + "\n")

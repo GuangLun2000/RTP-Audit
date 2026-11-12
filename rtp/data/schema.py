@@ -29,7 +29,8 @@ OPTION_FIELDS = {"label": str, "name": str, "role": str, "is_placebo": bool, "de
                  "n_reviews": (int, type(None)), "lab_note": (str, type(None))}
 PROBE_FIELDS = {"probe_id": str, "split": str, "category": str, "entity": str, "attributes": dict,
                 "template_id": int, "frame": str, "control": (str, type(None)), "other_entity": (str, type(None)),
-                "other_attributes": (dict, type(None)), "text": str, "name_char_span": list}
+                "other_attributes": (dict, type(None)), "other_first": (bool, type(None)), "text": str,
+                "name_char_span": list}
 ROLE_COUNTS = {"target": 1, "competitor": 2, "placebo_distractor": 1}
 
 

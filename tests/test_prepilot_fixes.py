@@ -226,6 +226,52 @@ def test_model_revision_is_recorded_and_enforced(work_dir):
     io.prepare_stage_dir(sdir, "x: 1\n", "h")
     stages.record_model_revision(sdir, M)
     assert io.read_json(sdir / io.STAGE_META)["model_commit"] == "abc"
-    M.config._commit_hash = "def"
+    M.config._commit_hash = "def"  # nothing computed yet: the baseline simply moves to the new revision
+    stages.record_model_revision(sdir, M)
+    assert io.read_json(sdir / io.STAGE_META)["model_commit"] == "def"
+    (sdir / "shards").mkdir()
+    (sdir / "shards" / "shard_00000.done").write_text("1")
+    M.config._commit_hash = "ghi"  # shards exist: a different revision would mix results
     with pytest.raises(io.StageConfigMismatch, match="revision"):
         stages.record_model_revision(sdir, M)
+
+
+def test_resume_baseline_moves_until_first_shard_and_covers_extract_layout(work_dir, monkeypatch):
+    from rtp import stages
+
+    sdir = work_dir / "stage3"
+    io.prepare_stage_dir(sdir, "x: 1\n", "h", extra_meta={"created_with": {"torch": "1", "device": "gpu-T4"}})
+    monkeypatch.setattr(stages, "environment", lambda: {"torch": "1", "device": "gpu-H200"})
+    stages.check_resume_environment(sdir)  # no shards: session 2 becomes the baseline
+    assert io.read_json(sdir / io.STAGE_META)["created_with"]["device"] == "gpu-H200"
+    (sdir / "probe").mkdir()
+    (sdir / "probe" / "shard_00000.done").write_text("1")  # extract layout: <set>/shard_*.done
+    monkeypatch.setattr(stages, "environment", lambda: {"torch": "1", "device": "gpu-RTX"})
+    with pytest.raises(io.StageConfigMismatch, match="different environment"):
+        stages.check_resume_environment(sdir)
+
+
+def test_measure_digest_ignores_m3_data_generators_and_registry():
+    from rtp.provenance import MODEL_STAGE_EXCLUDE_PREFIXES, PLUMBING, import_closure
+
+    used = [m for m in import_closure("rtp.measure.choice")
+            if m not in PLUMBING and not m.startswith(MODEL_STAGE_EXCLUDE_PREFIXES)]
+    assert not [m for m in used if m.startswith(("rtp.detect", "rtp.data.", "rtp.registry", "rtp.stages",
+                                                "rtp.report", "rtp.ops"))]
+    assert "rtp.measure.choice" in used and "rtp.infer" in used
+
+
+def test_free_answer_mapping_and_name_collisions():
+    from rtp.measure.choice import parse_answer
+
+    opts = [{"label": "A", "name": "Nike"}, {"label": "B", "name": "Bevodel"}, {"label": "C", "name": "Asics"},
+            {"label": "D", "name": "Hoka"}]
+    for text, want in [("B", "B"), ("Nike", "A"), ("I would go with Asics.", "C"), ("Bev", "B"), ("Hokas", "D"),
+                       ("Based on the", None), ("Puma", None)]:
+        assert parse_answer(text, opts) == want, text
+    tok = SplitTok()
+    letters = {tok._id(x) for x in ("A", " A", "B", " B", "C", " C", "D", " D")}
+    # three options sharing a first token: all three lose it (pairwise removal used to keep it for the third)
+    items = [{"options": [{"name": "Nike"}, {"name": "Nikon"}, {"name": "Nissan"}, {"name": "Asics"}]}]
+    per, _ = option_name_ids(tok, items, letters)
+    assert per[0][:3] == [[], [], []] and per[0][3]

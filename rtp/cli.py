@@ -73,6 +73,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("status", help="state of every stage of every model under a config")
     p.add_argument("--config", required=True)
+    p.add_argument("--unseal", action="store_true", help="also show results of test-split stages")
 
     p = sub.add_parser("doctor", help="environment preflight: GPU, bf16, library pins, HF token, disks, Hub access")
     p.add_argument("--config", help="also check the config, its data and Hub access to its models")
@@ -81,6 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("feedback", help="write a feedback bundle (status, errors, warnings, results) for an agent")
     p.add_argument("--config", required=True)
     p.add_argument("--tail", type=int, default=60, help="log lines to include per failed/partial stage")
+    p.add_argument("--unseal", action="store_true", help="also include results of test-split stages")
 
     for name, milestone in FUTURE_STAGES.items():
         sub.add_parser(name, help=f"not implemented yet ({milestone})")
@@ -118,6 +120,7 @@ def main(argv: list[str] | None = None) -> int:
         rc = _dispatch(args)
     except SealedSplitError as exc:
         log.error("%s", exc)
+        events.emit("error", f"SealedSplitError: {exc}", exit_code=3, argv=_argv(argv))
         rc = 3
     except (StageConfigMismatch, DataNotBuiltError, ModelLoadError, WorkDirError, ConfigError, SmokeFailure) as exc:
         log.error("%s: %s", type(exc).__name__, exc)
@@ -152,7 +155,9 @@ def _start_events(args: argparse.Namespace, argv: list[str] | None):
         from rtp.paths import run_dir
 
         name = load_config(cfg_path).name
-        path = run_dir(name) / "events.jsonl"
+        # smoke deletes and recreates its own run dir, so its events live next to it, never inside it
+        path = run_dir(name).parent / f"{name}.smoke_events.jsonl" if args.stage == "smoke" else \
+            run_dir(name) / "events.jsonl"
     except Exception:  # noqa: BLE001 - the command itself will report config / work-dir problems
         return None
     events.configure(path, config=name, stage=args.stage, model=getattr(args, "model", None))
@@ -189,12 +194,12 @@ def _dispatch(args: argparse.Namespace) -> int:
     if args.stage == "status":
         from rtp.ops import run_status
 
-        run_status(cfg)
+        run_status(cfg, unseal=args.unseal)
         return 0
     if args.stage == "feedback":
         from rtp.ops import build_feedback
 
-        build_feedback(cfg, tail=args.tail)
+        build_feedback(cfg, tail=args.tail, unseal=args.unseal)
         return 0
     if args.stage in ("measure", "open-ended", "extract"):
         from rtp.data.splits import check_split_access

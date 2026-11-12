@@ -133,7 +133,7 @@ class Config:
         from rtp.provenance import code_digest
 
         return _hash({"seed": self.seed, "data": dataclasses.asdict(self.data), "seed_files": self.seed_file_digests(),
-                      "code": code_digest("rtp.data.build")})
+                      "code": code_digest("rtp.data.build", exclude=())})
 
     def seed_file_digests(self) -> dict[str, str]:
         d = self.data
@@ -156,8 +156,12 @@ class Config:
             section.pop(k, None)
         if stage == "open_ended":
             section["shard_size"] = self.measure.shard_size  # open-ended shards by measure.shard_size
+        from rtp.registry import get_model_spec
+
+        spec = get_model_spec(model_id)
         return _hash({"stage": stage, "seed": self.seed, "settings": section, "model": model_id, "split": split,
-                      "prompt_mode": prompt_mode, "inputs": inputs, "code": code})
+                      "prompt_mode": prompt_mode, "inputs": inputs, "code": code,
+                      "model_spec": dataclasses.asdict(spec) if spec is not None else None})
 
     def resolve(self, rel: str) -> Path:
         """Resolve a seed-file path: absolute paths as-is, relative ones against the repo root."""

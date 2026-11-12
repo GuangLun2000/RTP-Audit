@@ -69,7 +69,7 @@ def test_status_and_feedback_bundle(work_dir, tmp_path, monkeypatch):
     assert rows[("dummy/model", "open_ended")]["state"] == "not started"
     assert "does not respond to rating evidence" in rows[("dummy/model", "measure")]["warnings"]
     bundle = build_feedback(cfg).read_text()
-    for section in ("## Environment", "## Stage status", "## Suggested next actions", "## Errors (1)",
+    for section in ("## Environment", "## Stage status", "## Suggested next actions", "## Errors (1 unresolved",
                     "## Warnings", "## Key results", "## Log tails", "## Last pytest run"):
         assert section in bundle, section
     assert "StageConfigMismatch" in bundle and "re-run them with --force" in bundle
@@ -142,3 +142,62 @@ def test_event_log_redacts_secrets(tmp_path, monkeypatch):
         events.configure(None)
     text = (tmp_path / "events.jsonl").read_text()
     assert secret not in text and "***" in text
+
+
+
+def test_smoke_starts_on_a_fresh_work_dir_with_event_log(work_dir, monkeypatch):
+    """Regression: the event log used to create runs/smoke/ first, and smoke then refused to use it."""
+    from rtp.paths import run_dir
+
+    class Stop(RuntimeError):
+        pass
+
+    def stub(path):
+        raise Stop("model load reached")
+
+    monkeypatch.setattr("rtp.models.load_model", stub)
+    with pytest.raises(Stop):
+        cli_main(["smoke"])
+    assert (run_dir("smoke") / "_SMOKE_RUN").exists()
+    assert (run_dir("smoke").parent / "smoke.smoke_events.jsonl").exists()
+
+
+def test_status_and_feedback_seal_test_results(work_dir, tmp_path):
+    from rtp.data.build import build_data
+    from rtp.ops import build_feedback, collect_status
+    from rtp.paths import stage_dir
+
+    cfg = load_config(_cfg_file(tmp_path, "sealy"))
+    build_data(cfg)
+    sdir = stage_dir(cfg.name, "dummy/model", "measure_test")
+    io.prepare_stage_dir(sdir, "x: 1\n", "h", extra_meta={"model_id": "dummy/model", "stage": "measure",
+                                                           "split": "test"})
+    io.mark_done(sdir, {"ladder_slope": 0.4242, "responds_to_ratings": False})
+    row = next(r for r in collect_status(cfg) if r["stage"] == "measure_test")
+    assert row["warnings"] == ["(sealed: pass --unseal to show)"]
+    assert "0.4242" not in build_feedback(cfg).read_text()
+    assert "0.4242" in build_feedback(cfg, unseal=True).read_text()
+
+
+def test_error_events_are_redacted_and_resolved_errors_omitted(work_dir, tmp_path, monkeypatch):
+    from rtp.ops import build_feedback
+
+    secret = "hf_" + "Z" * 30
+    monkeypatch.setenv("HF_TOKEN", secret)
+    path = _cfg_file(tmp_path, "redact")
+
+    def boom(args):
+        raise RuntimeError(f"boom with {secret}")
+
+    import rtp.cli
+
+    original = rtp.cli._dispatch
+    monkeypatch.setattr("rtp.cli._dispatch", boom)
+    with pytest.raises(RuntimeError):
+        cli_main(["status", "--config", str(path)])
+    text = (work_dir / "runs" / "redact" / "events.jsonl").read_text()
+    assert secret not in text and "boom with" in text
+    monkeypatch.setattr("rtp.cli._dispatch", original)
+    assert cli_main(["status", "--config", str(path)]) == 0  # same stage succeeds later -> resolved
+    bundle = build_feedback(load_config(path)).read_text()
+    assert "## Errors (0 unresolved; 1 resolved" in bundle and secret not in bundle

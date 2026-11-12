@@ -151,8 +151,8 @@ def test_schema_catches_tampering(tiny):
 
 def test_probe_items(tiny):
     probes = tiny["probe"]
-    # 2 categories x 2 entities x (3 templates x 2 frames + 2 binding controls)
-    assert len(probes) == 2 * 2 * (3 * 2 + 2)
+    # 2 categories x 2 entities x (3 templates x 2 frames + 2 binding controls in each of the 2 frames)
+    assert len(probes) == 2 * 2 * (3 * 2 + 4)
     choice_placebos = {r["entity"] for r in tiny["catalogue"] if r["is_placebo"]}
     for p in probes:
         s, t = p["name_char_span"]

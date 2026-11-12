@@ -10,8 +10,10 @@ Without the prefill a model can answer with the brand name ("Nike") instead of a
 letter renormalisation would then silently drop exactly the name-bound preference we want to
 measure. The prefill removes most of that, and two diagnostics catch the rest:
 ``name_mass_*`` (probability of each option's name-first token at the scored position) and
-``s_target_credit`` (log-odds after crediting that mass to its option). A fixed 2% sample is
-also decoded greedily (<= 4 tokens) to check that the letter argmax agrees with the output.
+``s_target_credit`` (log-odds after crediting that mass to its option). The spec §7.1 consistency
+check decodes a fixed 2% sample greedily WITHOUT the prefill (the model's free answer, mapped to an
+option by letter or brand name) and compares it with the scored argmax; with the prefill it would
+be nearly tautological, so the prefilled continuation is kept only as a separate format check.
 """
 
 from __future__ import annotations
@@ -110,6 +112,35 @@ def parse_letter(text: str | None) -> str | None:
     return m.group(1) if m else None
 
 
+def _norm(text: str) -> str:
+    return re.sub(r"[^0-9a-z]+", " ", text.lower().replace("'", "")).strip()
+
+
+def parse_answer(text: str | None, options: Sequence[dict[str, Any]]) -> str | None:
+    """Option letter of a FREE answer: an answer letter, else the option whose brand name it names.
+
+    A name counts as a whole word anywhere in the text (earliest wins), or as a truncated prefix of a
+    single option name (generation stops after a few tokens: "Bev" -> "Bevodel").
+    """
+    letter = parse_letter(text)
+    if letter or not text:
+        return letter
+    t = _norm(text)
+    if not t:
+        return None
+    best = None
+    for o in options:
+        n = _norm(o["name"])
+        m = re.search(r"(?<![0-9a-z])" + re.escape(n) + r"s?(?![0-9a-z])", t)
+        if m and (best is None or m.start() < best[0]):
+            best = (m.start(), o["label"])
+    if best:
+        return best[1]
+    first = t.split()[0] if t.split() else ""
+    cands = [o["label"] for o in options if len(first) >= 3 and _norm(o["name"]).replace(" ", "").startswith(first)]
+    return cands[0] if len(cands) == 1 else None
+
+
 def select_gen_check(item_ids: Sequence[str], fraction: float, seed: int) -> set[str]:
     """Deterministic, model-independent sample of items for the greedy consistency check."""
     n = len(item_ids)
@@ -121,10 +152,13 @@ def select_gen_check(item_ids: Sequence[str], fraction: float, seed: int) -> set
 
 
 # --------------------------------------------------------------------------- model scoring
-def render_inputs(lm: LoadedModel, user_texts: Sequence[str]) -> list[list[int]]:
+def render_inputs(lm: LoadedModel, user_texts: Sequence[str], prefill: bool = True) -> list[list[int]]:
+    """Scored prompts (``prefill=True``: chat turn prefilled with "Answer:"). ``prefill=False`` renders the
+    plain generation prompt used for the free-answer consistency check (base models: unchanged)."""
     tok = lm.tokenizer
     if lm.is_chat:
-        return [encode(tok, chat_prompt(lm, t, assistant_prefix=ANSWER_PREFILL), True) for t in user_texts]
+        return [encode(tok, chat_prompt(lm, t, assistant_prefix=ANSWER_PREFILL if prefill else None), True)
+                for t in user_texts]
     return [encode(tok, t + COMPLETION_SUFFIX, False) for t in user_texts]
 
 
@@ -136,11 +170,15 @@ def name_first_token_ids(tokenizer: Any, name: str, letter_set: set[int]) -> tup
     The first-token probability is an upper bound on the probability of answering with the name.
     """
     ids = set()
-    for text in (" " + name, name):
-        toks = tokenizer(text, add_special_tokens=False)["input_ids"]
+    spaced = tokenizer(" " + name, add_special_tokens=False)["input_ids"]
+    bare = tokenizer(name, add_special_tokens=False)["input_ids"]
+    for toks in (spaced, bare):
         if toks:
             ids.add(int(toks[0]))
-    return sorted(ids - letter_set), bool(ids & letter_set)
+    # after the "Answer:" prefill a name answer continues WITH a leading space, so only that form can be
+    # mistaken for a letter (e.g. " Cheetos" = " C" + "heet" + "os"); "Dell" -> "D"+"ell" is implausible there
+    collision = bool(spaced) and int(spaced[0]) in letter_set
+    return sorted(ids - letter_set), collision
 
 
 def option_name_ids(tokenizer: Any, items: Sequence[dict[str, Any]], letter_set: set[int]):
@@ -158,11 +196,11 @@ def option_name_ids(tokenizer: Any, items: Sequence[dict[str, Any]], letter_set:
             ids, c = cache[o["name"]]
             sets.append(set(ids))
             coll.append(c)
-        for a in range(len(sets)):
-            for b in range(a + 1, len(sets)):
-                shared = sets[a] & sets[b]
-                sets[a] -= shared
-                sets[b] -= shared
+        counts: dict[int, int] = {}
+        for x in sets:
+            for t in x:
+                counts[t] = counts.get(t, 0) + 1
+        sets = [{t for t in x if counts[t] == 1} for x in sets]  # shared by >= 2 options: not attributable
         per_item_ids.append([sorted(x) for x in sets])
         per_item_coll.append(coll)
     return per_item_ids, per_item_coll
@@ -219,14 +257,23 @@ def score_items(lm: LoadedModel, items: Sequence[dict[str, Any]], letter_ids: di
         "target_name_collision": [bool(c[t]) for c, t in zip(opt_coll, tgt_idx)],
         "s_target_credit": s_target(p_credit[rows, tgt_idx]),
         "gen_text": pd.Series([None] * len(items), dtype="object"),
+        "gen_letter_prefilled": pd.Series([None] * len(items), dtype="object"),
+        "gen_text_prefilled": pd.Series([None] * len(items), dtype="object"),
     })
     check = [i for i, it in enumerate(items) if it["item_id"] in gen_ids]
     if check:
-        texts = generate(lm, [seqs[i] for i in check], max_new_tokens=m.gen_max_new_tokens, do_sample=False,
-                         max_batch_size=m.max_batch_size, max_batch_tokens=m.max_batch_tokens)
-        for i, t in zip(check, texts):
-            df.at[i, "gen_text"] = t[0]
-            df.at[i, "gen_letter"] = parse_letter(t[0])
+        # spec §7.1 check: what the model FREELY answers (no prefill), mapped to an option letter
+        free_seqs = render_inputs(lm, [items[i]["prompt"] for i in check], prefill=False)
+        free = generate(lm, free_seqs, max_new_tokens=m.gen_max_new_tokens, do_sample=False,
+                        max_batch_size=m.max_batch_size, max_batch_tokens=m.max_batch_tokens)
+        # format diagnostic: greedy continuation of the scored (prefilled) prompt
+        pref = generate(lm, [seqs[i] for i in check], max_new_tokens=m.gen_max_new_tokens, do_sample=False,
+                        max_batch_size=m.max_batch_size, max_batch_tokens=m.max_batch_tokens)
+        for i, ft, pt in zip(check, free, pref):
+            df.at[i, "gen_text"] = ft[0]
+            df.at[i, "gen_letter"] = parse_answer(ft[0], items[i]["options"])
+            df.at[i, "gen_text_prefilled"] = pt[0]
+            df.at[i, "gen_letter_prefilled"] = parse_letter(pt[0])
     return df
 
 

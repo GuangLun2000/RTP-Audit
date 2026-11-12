@@ -28,11 +28,24 @@ def configure(path: Path | None, **context: Any) -> None:
         _PATH.parent.mkdir(parents=True, exist_ok=True)
 
 
+def redact(obj: Any) -> Any:
+    """Mask $HF_TOKEN and hf_... tokens in every string of ``obj`` (messages, tracebacks, argv)."""
+    from rtp.log import redact_text
+
+    if isinstance(obj, str):
+        return redact_text(obj)
+    if isinstance(obj, dict):
+        return {k: redact(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [redact(v) for v in obj]
+    return obj
+
+
 def emit(kind: str, message: str = "", **data: Any) -> None:
     if _PATH is None:
         return
-    rec = {"time": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z", "kind": kind, **_CTX,
-           "message": message, **({"data": data} if data else {})}
+    rec = redact({"time": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z", "kind": kind, **_CTX,
+                  "message": message, **({"data": data} if data else {})})
     try:
         with open(_PATH, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")

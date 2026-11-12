@@ -104,8 +104,9 @@ Scores every dev choice item by option letter.
   renormalised over the four letters.
 - `s_target = log(p/(1-p))`, with `p` clipped to [1e-4, 1-1e-4].
 - 4 cyclic rotations per item are averaged. Name effect = real-name minus placebo-name score within each `pair_id`.
-- A fixed 2% sample is decoded greedily (≤ 4 tokens) to check agreement with the letter argmax. Agreement below
-  90% triggers a warning in the summary.
+- A fixed 2% sample is decoded greedily (≤ 4 tokens) WITHOUT the prefill. The free answer is mapped to an option by
+  its letter or brand name and compared with the scored argmax. Agreement below 90% triggers a warning in the
+  summary. The greedy continuation of the prefilled prompt is reported separately as a format check.
 
 Outputs in `runs/<config>/<model_slug>/measure/`:
 
@@ -186,13 +187,17 @@ prompt, read at the option line), each layer and each attribute, and evaluates t
 - held-out dev categories (`probe.heldout_categories`), within the same frame and across frames;
 - binding controls: two-brand texts and undescribed names.
 
-It exports `K_{frame}_L{layer}.npy` for every layer: QR of the level-mean PCs followed by the probe weights, at
-rank ≤ `k_rank`.
+It exports `K_{frame}_L{layer}.npy` for every layer, at rank ≤ `k_rank`. K is an orthonormal basis of the probes'
+Haufe encoding patterns, then the PCs of entity-averaged level means, then the probe weights.
 
-`summary.md` starts with **Readiness for M4**. It warns when probes do not beat the control task, binding is not
-shown, K captures no more of the real-minus-placebo activation difference than a random subspace, placebo-trained
-probes do not transfer to real brands' catalogue tier, or the popularity probe does not separate real brands from
-placebos (familiarity).
+`summary.md` starts with **Readiness for M4**. Each check is compared with a shuffled-label null built the same way,
+the embedding layer is excluded, and p-values are corrected over layers. It warns when:
+
+- probes do not beat the control task;
+- binding is not shown in both description orders;
+- K captures no more of the real-minus-placebo activation difference than a shuffled-label K;
+- the price-tier read-out does not rank real brands by tier within categories;
+- the popularity read-out separates real brands from placebos no better than a shuffled probe (familiarity).
 
 ### `status`, `doctor`, `feedback` (operations)
 
@@ -202,7 +207,8 @@ python -m rtp.cli doctor --config configs/pilot.yaml
 python -m rtp.cli feedback --config configs/pilot.yaml
 ```
 
-- `status`: every stage of every model, shown as done / partial / stale / not started, with its warnings.
+- `status`: every stage of every model, shown as done / partial / partial+stale / stale / not started, with its
+  warnings. Test-split results stay hidden unless `--unseal` is passed.
 - `doctor`: GPU, bf16, library pins, whether the HF token is set, disks, Drive, data, and Hub access to the
   configured models.
 - `feedback`: writes `runs/<config>/feedback/feedback_<UTC>.md` for a coding agent (see `docs/AGENT_LOOP.md`).

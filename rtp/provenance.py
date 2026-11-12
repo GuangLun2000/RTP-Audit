@@ -20,8 +20,12 @@ from typing import Any
 
 PKG_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = PKG_ROOT.parent
+# Modules that cannot change a stage's numbers: bookkeeping, logging, progress, stage identity itself.
 PLUMBING = frozenset({"rtp.config", "rtp.io", "rtp.paths", "rtp.log", "rtp.provenance", "rtp.progress",
-                      "rtp.events", "rtp"})
+                      "rtp.events", "rtp.stages", "rtp"})
+# Model stages read generated files whose sha256 is already part of their identity, and the model's registry
+# entry is hashed explicitly; so data-generator code and the registry module are excluded from their digest.
+MODEL_STAGE_EXCLUDE_PREFIXES = ("rtp.data.", "rtp.registry")
 
 
 def _module_file(name: str) -> Path | None:
@@ -67,15 +71,30 @@ def import_closure(module: str) -> list[str]:
     return sorted(m for m in seen if _module_file(m) is not None)
 
 
+def _normalized_source(path: Path) -> bytes:
+    """Source with normalised line endings (identical digests on Windows/macOS/Linux checkouts)."""
+    return path.read_bytes().replace(b"\r\n", b"\n")
+
+
 @lru_cache(maxsize=None)
-def code_digest(module: str) -> str:
+def code_digest(module: str, exclude: tuple[str, ...] = ("rtp.config",), exclude_prefixes: tuple[str, ...] = ()) -> str:
+    """Digest of the source of ``module``'s import closure, minus plumbing, ``exclude`` and ``exclude_prefixes``.
+
+    ``rtp.config`` is plumbing for model stages (its effect is the serialised settings) but NOT for data
+    generation, whose constants (e.g. HANDICAP_MIN_EVIDENCE) live there: pass ``exclude=()`` for the data hash.
+    """
     h = hashlib.sha256()
+    skip = (PLUMBING - {"rtp.config"}) | set(exclude)
     for name in import_closure(module):
-        if name in PLUMBING:
+        if name in skip or any(name.startswith(p) for p in exclude_prefixes):
             continue
         path = _module_file(name)
-        h.update(name.encode() + b"\0" + path.read_bytes() + b"\0")
+        h.update(name.encode() + b"\0" + _normalized_source(path) + b"\0")
     return h.hexdigest()[:16]
+
+
+def stage_code_digest(module: str) -> str:
+    return code_digest(module, ("rtp.config",), MODEL_STAGE_EXCLUDE_PREFIXES)
 
 
 def _git(*args: str) -> str | None:

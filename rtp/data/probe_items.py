@@ -14,12 +14,14 @@ them). The vector is expressed in ``probe_templates`` different phrasings.
   {name} in its option line, the position where M4 transplants. In a causal LM the
   representation there depends only on what precedes it, so this frame trains K in the
   context it will be applied in.
-* Binding controls (evaluation only; background frame, ``template_id`` = entity index mod
-  templates):
+* Binding controls (evaluation only, in BOTH frames; ``template_id`` = entity index mod templates):
     - ``control="two_brand"``: the background describes X and then another probe entity Y;
-      the text ends "I'm considering X." A probe that reads X should match X's labels, not Y's.
+      the text ends "I'm considering X." (choice frame: X and Y are both options, read at X's line).
+      Half of the entities have Y described first (``other_first``), so text order cannot pass for binding.
+      A probe that reads X should match X's labels, not Y's.
     - ``control="undescribed"``: the background describes X but the text ends "I'm considering
-      Z." for an undescribed probe entity Z. Accuracy against Z's labels should be at chance.
+      Z." for an undescribed probe entity Z (choice frame: X and Z are options, read at Z's line).
+      Accuracy against Z's labels should be at chance, and against X's labels too (no context leakage).
 
 ``entity`` / ``attributes`` always refer to the entity whose name is READ, and
 ``other_entity`` / ``other_attributes`` to the other entity in the text (if any).
@@ -135,11 +137,30 @@ def render_choice_probe(name: str, category: str, attributes: dict[str, int], ph
 
 
 def render_two_brand(x: str, y: str, category: str, ax: dict[str, int], ay: dict[str, int],
-                     phrasing: int) -> tuple[str, list[int]]:
-    text = (f"Background: {background(x, category, ax, phrasing)} {background(y, category, ay, phrasing)}\n\n"
-            f"I'm considering {x}.")
+                     phrasing: int, other_first: bool = False) -> tuple[str, list[int]]:
+    """Background describes x and y (y first when ``other_first``, so order cannot stand in for binding); read x."""
+    bx, by = background(x, category, ax, phrasing), background(y, category, ay, phrasing)
+    text = f"Background: {by + ' ' + bx if other_first else bx + ' ' + by}\n\nI'm considering {x}."
     start = text.rindex(x)
     return text, [start, start + len(x)]
+
+
+def render_choice_control(read: str, described: list[tuple[str, dict[str, int]]], category: str, phrasing: int,
+                          others: list[str], positions: dict[str, int]) -> tuple[str, list[int]]:
+    """Choice-frame control: background describes ``described`` entities; the option list holds each named
+    entity at ``positions`` plus real brands; activations are read at ``read``'s option line."""
+    bg = " ".join(background(n, category, a, phrasing) for n, a in described)
+    slots: list[str | None] = [None] * 4
+    for name, pos in positions.items():
+        slots[pos] = name
+    fill = iter(others)
+    names = [n if n is not None else next(fill) for n in slots]
+    lines = "\n".join(f"{LETTERS[i]}. {n}" for i, n in enumerate(names))
+    choice = PROMPT_TEMPLATE.format(article=indefinite_article(category), category=category, lines=lines)
+    text = f"Background: {bg}\n\n{choice}"
+    marker = f"\n{LETTERS[positions[read]]}. {read}\n"
+    start = text.index(marker) + len(f"\n{LETTERS[positions[read]]}. ")
+    return text, [start, start + len(read)]
 
 
 def render_undescribed(x: str, z: str, category: str, ax: dict[str, int], phrasing: int) -> tuple[str, list[int]]:
@@ -157,13 +178,14 @@ def build_probe_items(cfg: Config, categories: list[str], probe_names: dict[str,
     items: list[dict[str, Any]] = []
     counter = 0
 
-    def add(category, split, entity, attrs, t, frame, text, span, control=None, other=None, other_attrs=None):
+    def add(category, split, entity, attrs, t, frame, text, span, control=None, other=None, other_attrs=None,
+            other_first=None):
         nonlocal counter
         counter += 1
         items.append({"probe_id": f"p-{counter:06d}", "split": split, "category": category, "entity": entity,
                       "attributes": dict(attrs), "template_id": t, "frame": frame, "control": control,
                       "other_entity": other, "other_attributes": dict(other_attrs) if other_attrs else None,
-                      "text": text, "name_char_span": span})
+                      "other_first": other_first, "text": text, "name_char_span": span})
 
     for category in categories:
         pool = probe_names.get(category, [])
@@ -191,9 +213,20 @@ def build_probe_items(cfg: Config, categories: list[str], probe_names: dict[str,
             if d.probe_controls and n >= 2:
                 t = i % d.probe_templates
                 y = names[(i + 1) % n]
-                text, span = render_two_brand(nm, y, category, attrs[nm], attrs[y], t)
-                add(category, split, nm, attrs[nm], t, "background", text, span, "two_brand", y, attrs[y])
                 z = names[(i + 2) % n] if n >= 3 else y
-                text, span = render_undescribed(nm, z, category, attrs[nm], t)
-                add(category, split, z, attrs[z], t, "background", text, span, "undescribed", nm, attrs[nm])
+                other_first = i % 2 == 1  # counterbalance: half the entities have the OTHER brand described first
+                if "background" in d.probe_frames:
+                    text, span = render_two_brand(nm, y, category, attrs[nm], attrs[y], t, other_first)
+                    add(category, split, nm, attrs[nm], t, "background", text, span, "two_brand", y, attrs[y],
+                        other_first)
+                    text, span = render_undescribed(nm, z, category, attrs[nm], t)
+                    add(category, split, z, attrs[z], t, "background", text, span, "undescribed", nm, attrs[nm])
+                if "choice" in d.probe_frames:  # binding of the probes that define K
+                    others = [reals[int(j)] for j in frame_rng.choice(len(reals), size=2, replace=False)]
+                    pos = [int(v) for v in frame_rng.permutation(4)[:2]]
+                    described = [(y, attrs[y]), (nm, attrs[nm])] if other_first else [(nm, attrs[nm]), (y, attrs[y])]
+                    text, span = render_choice_control(nm, described, category, t, others, {nm: pos[0], y: pos[1]})
+                    add(category, split, nm, attrs[nm], t, "choice", text, span, "two_brand", y, attrs[y], other_first)
+                    text, span = render_choice_control(z, [(nm, attrs[nm])], category, t, others, {z: pos[0], nm: pos[1]})
+                    add(category, split, z, attrs[z], t, "choice", text, span, "undescribed", nm, attrs[nm])
     return items

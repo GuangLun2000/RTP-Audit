@@ -275,13 +275,19 @@ def name_mass_by_entity(scores: pd.DataFrame, meta: pd.DataFrame) -> pd.DataFram
 
 
 def consistency(scores: pd.DataFrame) -> dict[str, Any]:
-    """Agreement between letter-probability argmax and the greedy generation on the checked sample."""
+    """Agreement of the scored letter argmax with the model's FREE greedy answer (spec §7.1 check; unparsed
+    answers count as disagreement), plus the prefilled-continuation format check when present."""
     chk = scores[scores["gen_text"].notna()]
     n = len(chk)
     if n == 0:
         return {"n_checked": 0, "agreement": float("nan"), "n_unparsed": 0}
-    agree = (chk["gen_letter"] == chk["argmax_letter"]).mean()
-    return {"n_checked": int(n), "agreement": float(agree), "n_unparsed": int(chk["gen_letter"].isna().sum())}
+    out = {"n_checked": int(n), "agreement": float((chk["gen_letter"] == chk["argmax_letter"]).mean()),
+           "n_unparsed": int(chk["gen_letter"].isna().sum())}
+    if "gen_letter_prefilled" in chk:
+        pref = chk[chk["gen_text_prefilled"].notna()]
+        if len(pref):
+            out["prefilled_agreement"] = float((pref["gen_letter_prefilled"] == pref["argmax_letter"]).mean())
+    return out
 
 
 def positional_bias(scores: pd.DataFrame, meta: pd.DataFrame) -> pd.DataFrame:
@@ -365,9 +371,12 @@ def summarize_measure(cfg: Config, model_id: str, split: str, items: list[dict[s
         lines.append(f"- **WARNING: mean letter mass {mass:.3f} < {LOW_LETTER_MASS}: the model is not answering with "
                      f"a letter at the scored position (wrong prompt mode or template?); letter scores are mostly "
                      f"noise.**")
-    lines += ["", "## Consistency check (letter argmax vs greedy generation)", "",
-              f"- checked {cons['n_checked']} items ({cfg.measure.gen_check_fraction:.0%} sample); agreement "
-              f"{cons['agreement']:.1%}; generations without a parsable letter: {cons['n_unparsed']}"]
+    lines += ["", "## Consistency check (scored letter argmax vs the model's free greedy answer)", "",
+              f"- checked {cons['n_checked']} items ({cfg.measure.gen_check_fraction:.0%} sample), generated WITHOUT "
+              f"the \"Answer:\" prefill and mapped to an option by letter or brand name; agreement "
+              f"{cons['agreement']:.1%}; answers naming no option: {cons['n_unparsed']}",
+              f"- format check (greedy continuation of the prefilled scored prompt): agreement "
+              f"{cons.get('prefilled_agreement', float('nan')):.1%}"]
     if warn:
         lines.append(f"- **WARNING: agreement {cons['agreement']:.1%} is below "
                      f"{cfg.measure.consistency_warn_below:.0%}; first-token letter scores may not reflect what "

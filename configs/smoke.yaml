@@ -28,12 +28,12 @@ open_ended:
 extract:
   layer_stride: 2
   choice_evidence_levels: [0]
-  choice_rotations: [0]
+  choice_rotations: [0, 2]  # target at A (no options before it) and at C (two before it)
   shard_size: 2000
   max_batch_size: 16
   max_batch_tokens: 8192
 probe:
-  k_rank: 16
+  k_rank: 18  # 9 encoding patterns + 9 read-outs: every attribute fits (spec default 16)
   heldout_categories: ["laptop"]  # dev categories used only to test probes
   cv_folds: 5
   k_frame: choice

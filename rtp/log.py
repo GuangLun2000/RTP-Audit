@@ -12,16 +12,18 @@ _TOKEN_RE = re.compile(r"hf_[A-Za-z0-9]{20,}")
 _FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 
 
+def redact_text(text: str) -> str:
+    secret = os.environ.get("HF_TOKEN")
+    if secret and len(secret) >= 8:
+        text = text.replace(secret, "***")
+    return _TOKEN_RE.sub("hf_***", text)
+
+
 class RedactSecrets(logging.Filter):
     """Mask Hugging Face tokens and the literal value of $HF_TOKEN in every record."""
 
     def filter(self, record: logging.LogRecord) -> bool:
-        msg = record.getMessage()
-        secret = os.environ.get("HF_TOKEN")
-        if secret and len(secret) >= 8:
-            msg = msg.replace(secret, "***")
-        msg = _TOKEN_RE.sub("hf_***", msg)
-        record.msg, record.args = msg, None
+        record.msg, record.args = redact_text(record.getMessage()), None
         return True
 
 

@@ -10,7 +10,7 @@ Prompts are rendered exactly as they are measured: chat models through the chat 
 (choice items with the "Answer:" prefill), base models as plain text. The name is located by
 finding the user text inside the rendered string and mapping its character span to tokens
 with ``return_offsets_mapping=True``. Layers are hidden-state indices 0 (embeddings), stride,
-2*stride, ... and always the last one. Arrays are float16, ``[n_items, n_layers, d_model]``,
+2*stride, ... below n_blocks (index n_blocks is the post-final-norm state and is excluded). Arrays are float16, ``[n_items, n_layers, d_model]``,
 written in shards with completion markers; the expected size is logged before writing.
 """
 
@@ -49,11 +49,10 @@ def extract_stage_name(split: str) -> str:
 
 
 def selected_layers(n_blocks: int, stride: int) -> list[int]:
-    """Hidden-state indices 0..n_blocks (0 = embeddings) every ``stride``, always including the last block."""
-    layers = list(range(0, n_blocks + 1, stride))
-    if layers[-1] != n_blocks:
-        layers.append(n_blocks)
-    return layers
+    """Hidden-state indices 0, stride, 2*stride, ... < n_blocks (0 = embeddings; index i = residual stream after
+    block i-1). Index n_blocks is excluded: transformers returns the FINAL-NORM output there, not the last block's
+    residual stream, so it is not a valid M4 transplant site."""
+    return list(range(0, n_blocks, stride))
 
 
 def target_name_span(item: dict[str, Any]) -> list[int]:
@@ -136,7 +135,8 @@ def prepare_records(lm: LoadedModel, set_name: str, items: list[dict[str, Any]])
             positions.append({"name": last_name})
             rows.append({"id": it["probe_id"], "category": it["category"], "entity": it["entity"],
                          "frame": it["frame"], "control": it["control"], "other_entity": it["other_entity"],
-                         "template_id": it["template_id"], **{f"y_{a}": v for a, v in it["attributes"].items()},
+                         "template_id": it["template_id"], "other_first": it.get("other_first"),
+                         **{f"y_{a}": v for a, v in it["attributes"].items()},
                          **{f"other_{a}": v for a, v in (it["other_attributes"] or {}).items()},
                          "name_tokens": n_name, "n_tokens": len(ids)})
         else:
@@ -184,7 +184,9 @@ def run_extract(cfg: Config, model_id: str, split: str = "dev", unseal: bool = F
         log.info("extract: %d probe + %d choice items, %d layers x d=%d -> about %.2f GB of float16 activations",
                  len(probes), len(choice), len(layers), d_model, total / 2**30)
         io.write_json(sdir / "layers.json", {"layers": layers, "n_blocks": n_blocks, "d_model": d_model,
-                                             "is_chat": lm.is_chat, "estimated_bytes": total})
+                                             "is_chat": lm.is_chat, "estimated_bytes": total,
+                                             "layer_meaning": "hidden_states index; i = residual stream after block "
+                                                              "i-1; 0 = embeddings; post-final-norm excluded"})
         for set_name, recs in (("probe", probes), ("choice", choice)):
             out = sdir / set_name
             out.mkdir(parents=True, exist_ok=True)
