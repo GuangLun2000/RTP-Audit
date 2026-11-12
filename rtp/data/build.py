@@ -144,9 +144,11 @@ def build_data(cfg: Config, force: bool = False) -> Path:
             files[rel] = io.write_jsonl(ddir / rel, [r for r in recs if r["split"] == split])
     # frozen copy of the seed files the data were built from (open-ended reads these)
     d = cfg.data
+    snapshot_sha: dict[str, str] = {}
     for src in (d.categories_file, d.placebo_file, d.natural_negatives_file):
         path = cfg.resolve(src)
         io.atomic_write_bytes(ddir / SEED_SNAPSHOT_DIR / path.name, path.read_bytes())
+        snapshot_sha[path.name] = io.file_sha256(ddir / SEED_SNAPSHOT_DIR / path.name)
     counts = cell_counts(out["choice"])
     io.atomic_write_text(ddir / "cell_counts.csv", counts.to_csv(index=False))
     report = data_report(cfg, out, counts)
@@ -155,6 +157,7 @@ def build_data(cfg: Config, force: bool = False) -> Path:
                 "seed_file_digests": cfg.seed_file_digests(),
                 "test_categories": list(cfg.data.test_categories), "categories": out["categories"],
                 "n_records": files, "sha256": {k: io.file_sha256(ddir / k) for k in sorted(files)},
+                "seed_snapshot_sha256": snapshot_sha,
                 "needs_review": out["needs_review"], "placebo_stats": out["placebo_stats"]}
     io.write_json(ddir / "data_manifest.json", manifest)
     io.atomic_write_text(ddir / "summary.md", report)
@@ -164,7 +167,7 @@ def build_data(cfg: Config, force: bool = False) -> Path:
 
 
 # --------------------------------------------------------------------------- sealed readers
-def _require_built(cfg: Config) -> Path:
+def require_built(cfg: Config) -> Path:
     ddir = data_dir(cfg.name)
     if not io.is_done(ddir):
         raise DataNotBuiltError(f"no finished data at {ddir}; run `python -m rtp.cli build-data --config ...` first")
@@ -178,7 +181,7 @@ def _require_built(cfg: Config) -> Path:
 
 def load_seed_snapshot(cfg: Config):
     """(CategorySeeds, natural negatives) from the frozen copy stored with the built data."""
-    ddir = _require_built(cfg) / SEED_SNAPSHOT_DIR
+    ddir = require_built(cfg) / SEED_SNAPSHOT_DIR
     seeds = load_category_seeds(ddir / cfg.resolve(cfg.data.categories_file).name)
     nn = load_natural_negatives(ddir / cfg.resolve(cfg.data.natural_negatives_file).name)
     return seeds, nn
@@ -186,14 +189,14 @@ def load_seed_snapshot(cfg: Config):
 
 def load_choice_items(cfg: Config, split: str, unseal: bool = False) -> list[dict[str, Any]]:
     check_split_access(split, unseal)
-    return io.read_jsonl(_require_built(cfg) / split / CHOICE)
+    return io.read_jsonl(require_built(cfg) / split / CHOICE)
 
 
 def load_probe_items(cfg: Config, split: str, unseal: bool = False) -> list[dict[str, Any]]:
     check_split_access(split, unseal)
-    return io.read_jsonl(_require_built(cfg) / split / PROBE)
+    return io.read_jsonl(require_built(cfg) / split / PROBE)
 
 
 def load_catalogue(cfg: Config, split: str, unseal: bool = False) -> list[dict[str, Any]]:
     check_split_access(split, unseal)
-    return [r for r in io.read_jsonl(_require_built(cfg) / CATALOGUE) if r["split"] == split]
+    return [r for r in io.read_jsonl(require_built(cfg) / CATALOGUE) if r["split"] == split]

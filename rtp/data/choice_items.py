@@ -49,6 +49,16 @@ def rotate(seq: list[Any], rotation: int) -> list[Any]:
     return out
 
 
+def _substitute_plan(evidence: int, cards_per_cell: int, e0_per_sub: int | None, n_placebo: int) -> list[int | None]:
+    """Per pair in a cell: a fixed substitute index, or None for a random draw.
+
+    Evidence 0 with ``e0_per_sub`` set: every placebo is the substitute ``e0_per_sub`` times.
+    """
+    if evidence == 0 and e0_per_sub:
+        return [i for i in range(n_placebo) for _ in range(e0_per_sub)]
+    return [None] * cards_per_cell
+
+
 def build_choice_items(cfg: Config, seeds: CategorySeeds, catalogue: list[dict[str, Any]]) -> list[dict[str, Any]]:
     d = cfg.data
     sampler = RangeCardSampler()
@@ -65,11 +75,15 @@ def build_choice_items(cfg: Config, seeds: CategorySeeds, catalogue: list[dict[s
         for target in reals:
             others = [x for x in reals if x != target]
             for e, h in cells(d.evidence_levels, d.handicaps):
-                for _ in range(d.cards_per_cell):
+                for sub_fixed in _substitute_plan(e, d.cards_per_cell, d.e0_pairs_per_substitute, len(placebos)):
                     pair_no += 1
                     pair_id = f"{spec.code}-{pair_no:06d}"
                     comp = [others[int(i)] for i in rng.choice(len(others), size=2, replace=False)]
-                    sub_i, dis_i = rng.choice(len(placebos), size=2, replace=False)
+                    if sub_fixed is None:
+                        sub_i, dis_i = rng.choice(len(placebos), size=2, replace=False)
+                    else:  # balanced: substitute fixed by the plan, distractor drawn from the other placebos
+                        rest = [i for i in range(len(placebos)) if i != sub_fixed]
+                        sub_i, dis_i = sub_fixed, rest[int(rng.integers(len(rest)))]
                     substitute, distractor = placebos[int(sub_i)], placebos[int(dis_i)]
                     cards = sample_pair_cards(rng, spec, seeds.lab_notes, sampler)
                     if e >= HANDICAP_MIN_EVIDENCE:

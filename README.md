@@ -81,7 +81,13 @@ data config changed, the command refuses to run; pass `--force` to rebuild or us
   ```
 
   Each name passes an automatic conflict check (case-insensitive, including substrings) against every known real
-  brand, and that check runs again on every build.
+  brand, and that check runs again on every build. Names never start with A–D, which could collide with the
+  option letters. After editing seeds, run the command below; it replaces only unusable names and keeps the others
+  together with their review flags:
+
+  ```bash
+  python -m rtp.cli make-placebos --repair
+  ```
 
 ### `measure`
 
@@ -101,11 +107,16 @@ Scores every dev choice item by option letter.
 
 Outputs in `runs/<config>/<model_slug>/measure/`:
 
-- `scores.parquet`: `item_id, model_id, p_A..p_D, s_target, gen_letter`, plus `argmax_letter, letter_mass, gen_text`.
+- `scores.parquet`: `item_id, model_id, p_A..p_D, s_target, gen_letter`, plus `argmax_letter, letter_mass,
+  name_mass_target, name_mass_other, target_name_collision, s_target_credit, gen_text`. Chat prompts end with a
+  prefilled assistant turn "Answer:", so the scored token is the answer letter rather than a brand name.
 - `pair_scores.parquet`, `name_effects.parquet`.
 - `entity_evidence.parquet`: entity × evidence-level name effects, plus the residual of the robust regression
   through the origin of evidence 4 on evidence 0.
-- `handicap_effects.parquet`, `ladder_regression.json`, `consistency.json`.
+- `handicap_effects.parquet`, `ladder_regression.json` (spec variant plus handicap-0 and format-baseline variants
+  with bootstrap CIs), `consistency.json`.
+- `evidence_sensitivity.json`: does the model respond to the rating, price and review gaps at all?
+- `name_mass_by_entity.parquet` and `entity_evidence_credit.parquet`: name-answer diagnostics.
 - `summary.md`, `_DONE`.
 
 `--split test --unseal` measures the sealed test split, writing to `measure_test/`.
@@ -148,7 +159,10 @@ the Named and Picked shares across checkpoints. Pass `--unseal` to include test-
 Long stages write `shard_XXXXX.parquet` plus a `.done` marker every `shard_size` prompts and end with `_DONE` and
 `summary.md`. Re-running the same command skips finished shards and finished stages.
 
-A stage dir is keyed by data, seed-file content, stage settings, model, split and prompt mode. A stage dir from a
+A stage dir is keyed by stage settings, model, split, prompt mode, the content of the files it reads, and the
+source code it imports. Any code change in a stage's import closure invalidates it. The stage metadata records the
+git commit, library versions, device and model revision. A half-finished stage refuses to resume under a different
+torch, transformers or tokenizers version, GPU or model revision. A stage dir from a
 different configuration is refused, whether finished or not, with exit code 4; pass `--force` to redo it. `report`
 leaves such stale stages out and lists them.
 

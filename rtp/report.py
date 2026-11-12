@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from rtp import io, registry
+from rtp import io, registry, stages
 from rtp.config import Config
 from rtp.data.splits import check_split_access
 from rtp.measure.choice import measure_stage_name
@@ -39,7 +39,11 @@ def _finished(cfg: Config, rdir: Path, stage: str, split: str, stale: list[str])
             continue
         meta = io.read_json(d / io.STAGE_META)
         model_id = meta.get("model_id", d.parent.name)
-        expected = cfg.stage_hash(kind, model_id, split, meta.get("prompt_mode", "auto"))
+        try:
+            expected = stages.stage_hash(cfg, kind, model_id, split, meta.get("prompt_mode", "auto"))
+        except (io.StageConfigMismatch, RuntimeError) as exc:  # data missing or built from other seeds/code
+            log.warning("cannot verify %s: %s", d, exc)
+            expected = None
         if meta.get("stage_hash") != expected:
             stale.append(f"{model_id} / {stage}")
             continue
@@ -64,8 +68,9 @@ def build_report(cfg: Config, unseal: bool = False) -> str:
             lines += ["(no finished stages)", ""]
             continue
         if measured:
-            lines += ["### Behavioural measurement", "", "| model | items | pairs | consistency | warning | letter mass | ladder slope |",
-                      "|---|---|---|---|---|---|---|"]
+            lines += ["### Behavioural measurement", "", "| model | items | pairs | consistency | warning | letter mass | uses rating evidence | name-answer gap "
+                      "| ladder slope (spec) |",
+                      "|---|---|---|---|---|---|---|---|---|"]
             ne_cols = []
             for model_id, d in measured:
                 info = io.read_json(d / io.DONE_FILE)
@@ -76,8 +81,13 @@ def build_report(cfg: Config, unseal: bool = False) -> str:
                 slope_s = f"{slope:+.3f}" if isinstance(slope, (int, float)) and slope == slope else "—"
                 mass = info.get("mean_letter_mass")
                 mass_s = "—" if mass is None else (f"**{mass:.3f}**" if info.get("letter_mass_warning") else f"{mass:.3f}")
+                resp = info.get("responds_to_ratings")
+                resp_s = {True: "yes", False: "**no**", None: "—"}[resp]
+                gap = info.get("name_mass_max_gap")
+                gap_s = "—" if gap is None else (f"**{gap:.3f}**" if info.get("name_mass_warning") else f"{gap:.3f}")
                 lines.append(f"| {model_id} | {info.get('n_items')} | {info.get('n_pairs')} | {agree_s} | "
-                             f"{'**yes**' if info.get('consistency_warning') else 'no'} | {mass_s} | {slope_s} |")
+                             f"{'**yes**' if info.get('consistency_warning') else 'no'} | {mass_s} | {resp_s} | "
+                             f"{gap_s} | {slope_s} |")
                 t = pd.read_parquet(d / "entity_evidence.parquet")
                 keep = [c for c in t.columns if c.startswith("ne_e")]
                 t = t.set_index(["category", "entity", "natural_negative"])[keep]

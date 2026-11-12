@@ -13,6 +13,7 @@ data:
   handicaps: [0, 1, 2, 3, 4]
   handicap_rating_deltas: [0.0, 0.1, 0.3, 0.5, 1.0]
   cards_per_cell: 4
+  e0_pairs_per_substitute: 4  # evidence 0: every target x every placebo substitute x 4
   test_categories: ["watch", "beer"]
   probe_entities_per_category: 30
   probe_templates: 10

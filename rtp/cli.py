@@ -58,6 +58,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--n-choice", type=int, default=8)
     p.add_argument("--n-probe", type=int, default=40)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--repair", action="store_true",
+                   help="keep the existing file; replace only unusable names (A-D initial, conflicts)")
 
     for name, milestone in FUTURE_STAGES.items():
         sub.add_parser(name, help=f"not implemented yet ({milestone})")
@@ -105,7 +107,7 @@ def _dispatch(args: argparse.Namespace) -> int:
         from rtp.data.placebo import make_placebo_file
 
         make_placebo_file(args.categories_file, args.natural_negatives_file, args.out,
-                          n_choice=args.n_choice, n_probe=args.n_probe, seed=args.seed)
+                          n_choice=args.n_choice, n_probe=args.n_probe, seed=args.seed, repair=args.repair)
         return 0
 
     cfg = load_config(args.config)

@@ -374,12 +374,13 @@ def test_generation_ignores_checkpoint_sampling_defaults(smoke_lm):
 def test_prompt_rendering_chat_vs_base(smoke_lm):
     from dataclasses import replace
 
-    from rtp.measure.choice import COMPLETION_SUFFIX, render_inputs
+    from rtp.measure.choice import ANSWER_PREFILL, COMPLETION_SUFFIX, render_inputs
     from rtp.measure.open_ended import PICK_PREFILL, continuation_ids, pick_prompt_text
 
     tok = smoke_lm.tokenizer
     chat = tok.decode(render_inputs(smoke_lm, ["Which one? Answer with a single letter."])[0])
-    assert chat.startswith("<|im_start|>") and chat.rstrip().endswith("<|im_start|>assistant")
+    # the assistant turn is open and prefilled with "Answer:" so the next token is the letter
+    assert chat.startswith("<|im_start|>") and chat.endswith("<|im_start|>assistant\n" + ANSWER_PREFILL)
     base_lm = replace(smoke_lm, is_chat=False)  # same weights, measured as if it were a base checkpoint
     base = tok.decode(render_inputs(base_lm, ["Which one? Answer with a single letter."])[0])
     assert "<|im_start|>" not in base and base.endswith(COMPLETION_SUFFIX)

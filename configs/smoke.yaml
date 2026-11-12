@@ -12,6 +12,7 @@ data:
   evidence_levels: [0, 1, 2, 3, 4]
   handicaps: [0, 1, 2, 3, 4]
   cards_per_cell: 1
+  e0_pairs_per_substitute: 1  # evidence 0: every target x every placebo substitute x 1
   test_categories: []
   probe_entities_per_category: 4
   probe_templates: 10

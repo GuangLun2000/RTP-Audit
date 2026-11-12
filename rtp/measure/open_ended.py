@@ -23,7 +23,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from rtp import io
+from rtp import io, stages
 from rtp.config import Config
 from rtp.data.build import load_catalogue, load_seed_snapshot
 from rtp.data.catalogue import brand_phrase, brand_phrase_plural, indefinite_article, normalize_name
@@ -258,18 +258,19 @@ def run_open_ended(cfg: Config, model_id: str, split: str = "dev", unseal: bool 
     categories = list(targets)
     nn_rows = {c: t["nn"] for c, t in targets.items() if t["nn"] is not None}
     sdir = stage_dir(cfg.name, model_id, open_ended_stage_name(split))
-    stage_hash = cfg.stage_hash("open_ended", model_id, split, prompt_mode)
-    if io.finished_stage(sdir, stage_hash, force):
-        log.info("open-ended already finished for %s with this config (%s); skipping", model_id, sdir)
+    shash = stages.stage_hash(cfg, "open_ended", model_id, split, prompt_mode)
+    if io.finished_stage(sdir, shash, force):
+        log.info("open-ended already finished for %s with this config and code (%s); skipping", model_id, sdir)
         return sdir
-    io.prepare_stage_dir(sdir, cfg.to_yaml(), stage_hash, force=force,
-                         extra_meta={"model_id": model_id, "split": split, "stage": "open_ended",
-                                     "prompt_mode": prompt_mode})
+    io.prepare_stage_dir(sdir, cfg.to_yaml(), shash, force=force,
+                         extra_meta=stages.stage_meta("open_ended", model_id, split, prompt_mode))
+    stages.check_resume_environment(sdir, force)
     handler = add_file_log(sdir / "log.txt")
     t0 = time.time()
     o, m = cfg.open_ended, cfg.measure
     try:
         lm = apply_prompt_mode(load_model(model_id), prompt_mode)
+        stages.record_model_revision(sdir, lm.model)
         gen_jobs = _gen_jobs(lm, cfg, categories)
         pick_jobs = _pick_jobs(lm, cfg, targets)
 
@@ -317,7 +318,10 @@ def run_open_ended(cfg: Config, model_id: str, split: str = "dev", unseal: bool 
         dist = answer_distribution(gens)
         io.write_parquet(sdir / "answer_distribution.parquet", dist)
         write_summary(sdir, cfg, model_id, split, lm.is_chat, shares, dist, variants, time.time() - t0)
+        from rtp.provenance import environment
+
         io.mark_done(sdir, {"model_id": model_id, "split": split, "is_chat": lm.is_chat,
+                            "finished_with": environment(),
                             "n_generations": int(len(gens)), "n_pick_variants": int(len(variants)),
                             "categories": categories, "elapsed_s": round(time.time() - t0, 1)})
         log.info("open-ended finished: %s", sdir)

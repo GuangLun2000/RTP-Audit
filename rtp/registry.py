@@ -23,6 +23,8 @@ class ModelSpec:
     note: str = ""
     # extra keyword arguments for tokenizer.apply_chat_template, as (key, value) pairs
     chat_template_kwargs: tuple[tuple[str, object], ...] = ()
+    # optional Hub commit to pin (None = default branch); the loaded commit is recorded per stage either way
+    revision: str | None = None
 
 
 @dataclass(frozen=True)

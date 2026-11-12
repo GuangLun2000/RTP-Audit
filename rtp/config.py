@@ -41,6 +41,9 @@ class DataConfig:
     handicaps: list[int] = field(default_factory=lambda: list(HANDICAPS))
     handicap_rating_deltas: list[float] = field(default_factory=lambda: [0.0, 0.1, 0.3, 0.5, 1.0])
     cards_per_cell: int = 4
+    # evidence 0 (where M4 computes the identity residual): when set, every target is crossed with EVERY
+    # choice placebo as substitute, this many pairs each (balanced substitutes, more pairs); None = cards_per_cell
+    e0_pairs_per_substitute: int | None = None
     test_categories: list[str] = field(default_factory=list)
     probe_entities_per_category: int = 30
     probe_templates: int = 10
@@ -92,12 +95,15 @@ class Config:
 
     @property
     def data_hash(self) -> str:
-        """Seed + data section + the CONTENT of the seed files (review flags excluded).
+        """Seed + data section + the CONTENT of the seed files (review flags excluded) + generator code.
 
-        Editing a brand, alias, range or placebo name changes the hash; ticking
-        ``needs_review`` / ``needs_web_check`` after a review does not.
+        Editing a brand, alias, range or placebo name, or the generator code, changes the hash;
+        ticking ``needs_review`` / ``needs_web_check`` after a review does not.
         """
-        return _hash({"seed": self.seed, "data": dataclasses.asdict(self.data), "seed_files": self.seed_file_digests()})
+        from rtp.provenance import code_digest
+
+        return _hash({"seed": self.seed, "data": dataclasses.asdict(self.data), "seed_files": self.seed_file_digests(),
+                      "code": code_digest("rtp.data.build")})
 
     def seed_file_digests(self) -> dict[str, str]:
         d = self.data
@@ -105,15 +111,22 @@ class Config:
                 "placebos": _yaml_digest(self.resolve(d.placebo_file)),
                 "natural_negatives": _bytes_digest(self.resolve(d.natural_negatives_file))}
 
-    def stage_hash(self, stage: str, model_id: str, split: str, prompt_mode: str = "auto") -> str:
-        """Identity of a per-model stage dir: data + the stage's own settings + model + split + prompt mode."""
+    def stage_hash(self, stage: str, model_id: str, split: str, prompt_mode: str = "auto", inputs: str = "",
+                   code: str = "") -> str:
+        """Identity of a per-model stage dir: the stage's settings + model + split + prompt mode + a digest of
+        the input FILES it reads (``inputs``) + a digest of the code that computes it (``code``).
+
+        Keyed on input content rather than on the whole data hash, so that adding probe items or
+        editing probe placebos does not invalidate behavioural stages whose inputs are unchanged.
+        Use ``rtp.stages.stage_hash`` to get the right ``inputs``/``code`` for a stage.
+        """
         section = dataclasses.asdict({"measure": self.measure, "open_ended": self.open_ended}[stage])
         for k in ("max_batch_size", "max_batch_tokens"):  # batch limits only reorder work; allow resuming after OOM
             section.pop(k, None)
         if stage == "open_ended":
             section["shard_size"] = self.measure.shard_size  # open-ended shards by measure.shard_size
-        return _hash({"stage": stage, "data": self.data_hash, "seed": self.seed, "settings": section,
-                      "model": model_id, "split": split, "prompt_mode": prompt_mode})
+        return _hash({"stage": stage, "seed": self.seed, "settings": section, "model": model_id, "split": split,
+                      "prompt_mode": prompt_mode, "inputs": inputs, "code": code})
 
     def resolve(self, rel: str) -> Path:
         """Resolve a seed-file path: absolute paths as-is, relative ones against the repo root."""
@@ -224,6 +237,9 @@ def validate(cfg: Config) -> None:
     need(all(x >= 0 for x in d.handicap_rating_deltas) and d.handicap_rating_deltas[0] == 0,
          "handicap_rating_deltas must be >= 0 and start at 0")
     need(d.cards_per_cell >= 1, "cards_per_cell must be >= 1")
+    need(d.e0_pairs_per_substitute is None or (isinstance(d.e0_pairs_per_substitute, int)
+                                               and d.e0_pairs_per_substitute >= 1),
+         "e0_pairs_per_substitute must be null or an integer >= 1")
     need(d.probe_entities_per_category >= 1 and d.probe_templates >= 1, "probe sizes must be >= 1")
     if d.categories is not None:
         need(len(d.categories) == len(set(d.categories)) and len(d.categories) > 0,

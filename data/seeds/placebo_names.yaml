@@ -7,29 +7,35 @@ generator:
   seed: 0
   n_choice: 8
   n_probe: 40
+  repaired: 91
 choice:
   running shoe:
   - name: Trake
     needs_web_check: true
-  - name: Dimal
+  - name: Pavoprur
     needs_web_check: true
-  - name: Bevodel
+    replaces: Dimal
+  - name: Grebren
     needs_web_check: true
-  - name: Drofli
+    replaces: Bevodel
+  - name: Mifel
     needs_web_check: true
+    replaces: Drofli
   - name: Nokikur
     needs_web_check: true
   - name: Labin
     needs_web_check: true
   - name: Vima
     needs_web_check: true
-  - name: Drotruk
+  - name: Pidis
     needs_web_check: true
+    replaces: Drotruk
   laptop:
   - name: Satek
     needs_web_check: true
-  - name: Bribrox
+  - name: Klemol
     needs_web_check: true
+    replaces: Bribrox
   - name: Mezaklel
     needs_web_check: true
   - name: Grefel
@@ -38,21 +44,26 @@ choice:
     needs_web_check: true
   - name: Ruprak
     needs_web_check: true
-  - name: Bridil
+  - name: Lodre
     needs_web_check: true
-  - name: Drulen
+    replaces: Bridil
+  - name: Prubu
     needs_web_check: true
+    replaces: Drulen
   smartphone:
   - name: Ristex
     needs_web_check: true
-  - name: Dramuzax
+  - name: Stavil
     needs_web_check: true
-  - name: Botrisil
+    replaces: Dramuzax
+  - name: Zenel
     needs_web_check: true
+    replaces: Botrisil
   - name: Zibe
     needs_web_check: true
-  - name: Dristuk
+  - name: Klabogir
     needs_web_check: true
+    replaces: Dristuk
   - name: Fedak
     needs_web_check: true
   - name: Vutisa
@@ -60,20 +71,23 @@ choice:
   - name: Zigubas
     needs_web_check: true
   camera:
-  - name: Dregar
+  - name: Nifik
     needs_web_check: true
+    replaces: Dregar
   - name: Stigoste
     needs_web_check: true
   - name: Vabru
     needs_web_check: true
-  - name: Deklak
+  - name: Lugezek
     needs_web_check: true
+    replaces: Deklak
   - name: Zivamak
     needs_web_check: true
   - name: Flebrex
     needs_web_check: true
-  - name: Bestax
+  - name: Muram
     needs_web_check: true
+    replaces: Bestax
   - name: Flagrok
     needs_web_check: true
   coffee brand:
@@ -89,8 +103,9 @@ choice:
     needs_web_check: true
   - name: Nabrel
     needs_web_check: true
-  - name: Brepri
+  - name: Nidrok
     needs_web_check: true
+    replaces: Brepri
   - name: Fodok
     needs_web_check: true
   watch:
@@ -115,8 +130,9 @@ choice:
     needs_web_check: true
   - name: Refun
     needs_web_check: true
-  - name: Bepir
+  - name: Gores
     needs_web_check: true
+    replaces: Bepir
   - name: Lazal
     needs_web_check: true
   - name: Gatom
@@ -136,14 +152,17 @@ choice:
     needs_web_check: true
   - name: Flofli
     needs_web_check: true
-  - name: Dranozuk
+  - name: Gikem
     needs_web_check: true
-  - name: Dagax
+    replaces: Dranozuk
+  - name: Stapruk
     needs_web_check: true
+    replaces: Dagax
   - name: Simum
     needs_web_check: true
-  - name: Briso
+  - name: Tanin
     needs_web_check: true
+    replaces: Briso
   sneaker:
   - name: Keda
     needs_web_check: true
@@ -166,8 +185,9 @@ choice:
     needs_web_check: true
   - name: Vubrim
     needs_web_check: true
-  - name: Brodo
+  - name: Kilu
     needs_web_check: true
+    replaces: Brodo
   - name: Zudozis
     needs_web_check: true
   - name: Trizuran
@@ -214,40 +234,46 @@ probe:
     needs_web_check: true
   - name: Pregel
     needs_web_check: true
-  - name: Drikasel
+  - name: Papru
     needs_web_check: true
+    replaces: Drikasel
   - name: Gadran
     needs_web_check: true
-  - name: Buvun
+  - name: Lofebil
     needs_web_check: true
+    replaces: Buvun
   - name: Flalun
     needs_web_check: true
   - name: Giklor
     needs_web_check: true
   - name: Gonuk
     needs_web_check: true
-  - name: Drumir
+  - name: Zalefuk
     needs_web_check: true
+    replaces: Drumir
   - name: Siful
     needs_web_check: true
   - name: Kibam
     needs_web_check: true
   - name: Topraran
     needs_web_check: true
-  - name: Brases
+  - name: Stabrus
     needs_web_check: true
+    replaces: Brases
   - name: Mari
     needs_web_check: true
-  - name: Bograx
+  - name: Futrifo
     needs_web_check: true
+    replaces: Bograx
   - name: Viflar
     needs_web_check: true
   - name: Stuflur
     needs_web_check: true
   - name: Fodutes
     needs_web_check: true
-  - name: Bafel
+  - name: Viflor
     needs_web_check: true
+    replaces: Bafel
   - name: Rudal
     needs_web_check: true
   - name: Prepokis
@@ -285,10 +311,12 @@ probe:
     needs_web_check: true
   - name: Pilox
     needs_web_check: true
-  - name: Bitil
+  - name: Klikas
     needs_web_check: true
-  - name: Dafen
+    replaces: Bitil
+  - name: Stifos
     needs_web_check: true
+    replaces: Dafen
   - name: Kledu
     needs_web_check: true
   - name: Stapral
@@ -297,8 +325,9 @@ probe:
     needs_web_check: true
   - name: Zobuk
     needs_web_check: true
-  - name: Bromas
+  - name: Pufex
     needs_web_check: true
+    replaces: Bromas
   - name: Kosax
     needs_web_check: true
   - name: Gagur
@@ -339,8 +368,9 @@ probe:
     needs_web_check: true
   - name: Flakux
     needs_web_check: true
-  - name: Brove
+  - name: Todror
     needs_web_check: true
+    replaces: Brove
   smartphone:
   - name: Zilik
     needs_web_check: true
@@ -358,14 +388,17 @@ probe:
     needs_web_check: true
   - name: Ranik
     needs_web_check: true
-  - name: Datron
+  - name: Zatro
     needs_web_check: true
-  - name: Dopiste
+    replaces: Datron
+  - name: Gadre
     needs_web_check: true
+    replaces: Dopiste
   - name: Flotas
     needs_web_check: true
-  - name: Bafin
+  - name: Lonak
     needs_web_check: true
+    replaces: Bafin
   - name: Kludim
     needs_web_check: true
   - name: Nutux
@@ -376,22 +409,27 @@ probe:
     needs_web_check: true
   - name: Pruten
     needs_web_check: true
-  - name: Drador
+  - name: Kustak
     needs_web_check: true
+    replaces: Drador
   - name: Stugitre
     needs_web_check: true
-  - name: Drabram
+  - name: Gistik
     needs_web_check: true
-  - name: Dragrol
+    replaces: Drabram
+  - name: Pubri
     needs_web_check: true
+    replaces: Dragrol
   - name: Labox
     needs_web_check: true
   - name: Kotek
     needs_web_check: true
-  - name: Devar
+  - name: Matrom
     needs_web_check: true
-  - name: Dagru
+    replaces: Devar
+  - name: Latren
     needs_web_check: true
+    replaces: Dagru
   - name: Gonix
     needs_web_check: true
   - name: Futrox
@@ -423,8 +461,9 @@ probe:
   - name: Kleruk
     needs_web_check: true
   camera:
-  - name: Bruga
+  - name: Flude
     needs_web_check: true
+    replaces: Bruga
   - name: Kligrim
     needs_web_check: true
   - name: Mosan
@@ -435,8 +474,9 @@ probe:
     needs_web_check: true
   - name: Kustudun
     needs_web_check: true
-  - name: Bofo
+  - name: Kestok
     needs_web_check: true
+    replaces: Bofo
   - name: Gavupes
     needs_web_check: true
   - name: Kafar
@@ -447,8 +487,9 @@ probe:
     needs_web_check: true
   - name: Praflun
     needs_web_check: true
-  - name: Drasofom
+  - name: Grodri
     needs_web_check: true
+    replaces: Drasofom
   - name: Meden
     needs_web_check: true
   - name: Gukel
@@ -516,18 +557,21 @@ probe:
     needs_web_check: true
   - name: Gume
     needs_web_check: true
-  - name: Drasibu
+  - name: Klopom
     needs_web_check: true
+    replaces: Drasibu
   - name: Prozex
     needs_web_check: true
   - name: Katra
     needs_web_check: true
   - name: Suveprix
     needs_web_check: true
-  - name: Duni
+  - name: Motel
     needs_web_check: true
-  - name: Dopusor
+    replaces: Duni
+  - name: Pratres
     needs_web_check: true
+    replaces: Dopusor
   - name: Zastos
     needs_web_check: true
   - name: Limox
@@ -536,12 +580,15 @@ probe:
     needs_web_check: true
   - name: Kestir
     needs_web_check: true
-  - name: Dobo
+  - name: Trugum
     needs_web_check: true
-  - name: Dofik
+    replaces: Dobo
+  - name: Riprix
     needs_web_check: true
-  - name: Bukapro
+    replaces: Dofik
+  - name: Febe
     needs_web_check: true
+    replaces: Bukapro
   - name: Gese
     needs_web_check: true
   - name: Gugul
@@ -556,8 +603,9 @@ probe:
     needs_web_check: true
   - name: Faven
     needs_web_check: true
-  - name: Betetra
+  - name: Gresil
     needs_web_check: true
+    replaces: Betetra
   - name: Redogi
     needs_web_check: true
   - name: Radrek
@@ -570,8 +618,9 @@ probe:
     needs_web_check: true
   - name: Nufizix
     needs_web_check: true
-  - name: Brepo
+  - name: Trefox
     needs_web_check: true
+    replaces: Brepo
   - name: Klulak
     needs_web_check: true
   - name: Stodus
@@ -585,16 +634,18 @@ probe:
   - name: Lesto
     needs_web_check: true
   watch:
-  - name: Brote
+  - name: Trekesek
     needs_web_check: true
+    replaces: Brote
   - name: Tolem
     needs_web_check: true
   - name: Punapran
     needs_web_check: true
   - name: Fabux
     needs_web_check: true
-  - name: Dopol
+  - name: Tromim
     needs_web_check: true
+    replaces: Dopol
   - name: Proli
     needs_web_check: true
   - name: Nugrik
@@ -611,32 +662,37 @@ probe:
     needs_web_check: true
   - name: Vutor
     needs_web_check: true
-  - name: Daflum
+  - name: Nelo
     needs_web_check: true
+    replaces: Daflum
   - name: Trofler
     needs_web_check: true
   - name: Flitin
     needs_web_check: true
-  - name: Dagir
+  - name: Gabrika
     needs_web_check: true
+    replaces: Dagir
   - name: Fagel
     needs_web_check: true
   - name: Gifok
     needs_web_check: true
-  - name: Bramam
+  - name: Fliklar
     needs_web_check: true
+    replaces: Bramam
   - name: Gesi
     needs_web_check: true
   - name: Fabrim
     needs_web_check: true
   - name: Grobazax
     needs_web_check: true
-  - name: Bribrur
+  - name: Staprak
     needs_web_check: true
+    replaces: Bribrur
   - name: Troma
     needs_web_check: true
-  - name: Bepipru
+  - name: Prulam
     needs_web_check: true
+    replaces: Bepipru
   - name: Rusti
     needs_web_check: true
   - name: Ligro
@@ -647,8 +703,9 @@ probe:
     needs_web_check: true
   - name: Trusi
     needs_web_check: true
-  - name: Bufe
+  - name: Stedren
     needs_web_check: true
+    replaces: Bufe
   - name: Vaka
     needs_web_check: true
   - name: Pibrin
@@ -659,8 +716,9 @@ probe:
     needs_web_check: true
   - name: Klogrul
     needs_web_check: true
-  - name: Dravo
+  - name: Flabrem
     needs_web_check: true
+    replaces: Dravo
   - name: Zofo
     needs_web_check: true
   - name: Kerak
@@ -678,8 +736,9 @@ probe:
     needs_web_check: true
   - name: Kludis
     needs_web_check: true
-  - name: Dralus
+  - name: Prupipex
     needs_web_check: true
+    replaces: Dralus
   - name: Vikla
     needs_web_check: true
   - name: Gizul
@@ -690,20 +749,24 @@ probe:
     needs_web_check: true
   - name: Zizex
     needs_web_check: true
-  - name: Brute
+  - name: Porebis
     needs_web_check: true
+    replaces: Brute
   - name: Riflul
     needs_web_check: true
   - name: Pokir
     needs_web_check: true
-  - name: Bomek
+  - name: Tazun
     needs_web_check: true
+    replaces: Bomek
   - name: Tame
     needs_web_check: true
-  - name: Bubox
+  - name: Gregex
     needs_web_check: true
-  - name: Borik
+    replaces: Bubox
+  - name: Tesok
     needs_web_check: true
+    replaces: Borik
   - name: Stoklil
     needs_web_check: true
   - name: Klerel
@@ -714,16 +777,18 @@ probe:
     needs_web_check: true
   - name: Pedun
     needs_web_check: true
-  - name: Brivuk
+  - name: Proral
     needs_web_check: true
+    replaces: Brivuk
   - name: Vopan
     needs_web_check: true
   - name: Nobon
     needs_web_check: true
   - name: Tritrer
     needs_web_check: true
-  - name: Dusi
+  - name: Saban
     needs_web_check: true
+    replaces: Dusi
   - name: Sorom
     needs_web_check: true
   - name: Rigur
@@ -736,21 +801,25 @@ probe:
     needs_web_check: true
   - name: Zugrum
     needs_web_check: true
-  - name: Bopan
+  - name: Pogre
     needs_web_check: true
+    replaces: Bopan
   - name: Puvis
     needs_web_check: true
-  - name: Burir
+  - name: Romux
     needs_web_check: true
+    replaces: Burir
   - name: Roprel
     needs_web_check: true
   - name: Stovus
     needs_web_check: true
   snack brand:
-  - name: Benur
+  - name: Tribukex
     needs_web_check: true
-  - name: Brumax
+    replaces: Benur
+  - name: Zarex
     needs_web_check: true
+    replaces: Brumax
   - name: Vubrafle
     needs_web_check: true
   - name: Neprir
@@ -765,12 +834,14 @@ probe:
     needs_web_check: true
   - name: Prevuk
     needs_web_check: true
-  - name: Brigri
+  - name: Neflum
     needs_web_check: true
+    replaces: Brigri
   - name: Neflim
     needs_web_check: true
-  - name: Dubuk
+  - name: Zurux
     needs_web_check: true
+    replaces: Dubuk
   - name: Mekla
     needs_web_check: true
   - name: Vistuk
@@ -791,10 +862,12 @@ probe:
     needs_web_check: true
   - name: Trinex
     needs_web_check: true
-  - name: Dribam
+  - name: Kekul
     needs_web_check: true
-  - name: Draflal
+    replaces: Dribam
+  - name: Tako
     needs_web_check: true
+    replaces: Draflal
   - name: Zobrix
     needs_web_check: true
   - name: Fluper
@@ -803,28 +876,32 @@ probe:
     needs_web_check: true
   - name: Gakel
     needs_web_check: true
-  - name: Branas
+  - name: Zupek
     needs_web_check: true
+    replaces: Branas
   - name: Studros
     needs_web_check: true
   - name: Vistox
     needs_web_check: true
-  - name: Depribin
+  - name: Fitran
     needs_web_check: true
+    replaces: Depribin
   - name: Kemax
     needs_web_check: true
   - name: Kulorex
     needs_web_check: true
-  - name: Datrel
+  - name: Sutemel
     needs_web_check: true
+    replaces: Datrel
   - name: Repru
     needs_web_check: true
   - name: Galili
     needs_web_check: true
   - name: Klara
     needs_web_check: true
-  - name: Dazar
+  - name: Tritos
     needs_web_check: true
+    replaces: Dazar
   - name: Trozitel
     needs_web_check: true
   sneaker:
@@ -840,8 +917,9 @@ probe:
     needs_web_check: true
   - name: Piprar
     needs_web_check: true
-  - name: Britox
+  - name: Trobrun
     needs_web_check: true
+    replaces: Britox
   - name: Stoke
     needs_web_check: true
   - name: Rezo
@@ -872,22 +950,26 @@ probe:
     needs_web_check: true
   - name: Tuvel
     needs_web_check: true
-  - name: Deki
+  - name: Kivizos
     needs_web_check: true
+    replaces: Deki
   - name: Floflak
     needs_web_check: true
-  - name: Brano
+  - name: Sadras
     needs_web_check: true
+    replaces: Brano
   - name: Stenim
     needs_web_check: true
-  - name: Dretru
+  - name: Ridom
     needs_web_check: true
+    replaces: Dretru
   - name: Tubix
     needs_web_check: true
   - name: Gradem
     needs_web_check: true
-  - name: Destan
+  - name: Prime
     needs_web_check: true
+    replaces: Destan
   - name: Rinis
     needs_web_check: true
   - name: Flusok
@@ -900,12 +982,14 @@ probe:
     needs_web_check: true
   - name: Sepri
     needs_web_check: true
-  - name: Dridrox
+  - name: Metan
     needs_web_check: true
+    replaces: Dridrox
   - name: Save
     needs_web_check: true
-  - name: Bizir
+  - name: Kludux
     needs_web_check: true
+    replaces: Bizir
   - name: Gosom
     needs_web_check: true
   electric car:
@@ -915,8 +999,9 @@ probe:
     needs_web_check: true
   - name: Suzes
     needs_web_check: true
-  - name: Druzin
+  - name: Klatres
     needs_web_check: true
+    replaces: Druzin
   - name: Gukox
     needs_web_check: true
   - name: Zebru
@@ -937,8 +1022,9 @@ probe:
     needs_web_check: true
   - name: Flepus
     needs_web_check: true
-  - name: Druklax
+  - name: Fasigren
     needs_web_check: true
+    replaces: Druklax
   - name: Flunim
     needs_web_check: true
   - name: Stafos
@@ -947,14 +1033,17 @@ probe:
     needs_web_check: true
   - name: Tutik
     needs_web_check: true
-  - name: Didur
+  - name: Lidal
     needs_web_check: true
-  - name: Bradrul
+    replaces: Didur
+  - name: Prefa
     needs_web_check: true
+    replaces: Bradrul
   - name: Staku
     needs_web_check: true
-  - name: Drefipik
+  - name: Telaflan
     needs_web_check: true
+    replaces: Drefipik
   - name: Pratrok
     needs_web_check: true
   - name: Molir
@@ -965,16 +1054,18 @@ probe:
     needs_web_check: true
   - name: Grikok
     needs_web_check: true
-  - name: Brimom
+  - name: Pedro
     needs_web_check: true
+    replaces: Brimom
   - name: Kiklil
     needs_web_check: true
   - name: Niklam
     needs_web_check: true
   - name: Grosar
     needs_web_check: true
-  - name: Bigrun
+  - name: Fleflak
     needs_web_check: true
+    replaces: Bigrun
   - name: Gadrimos
     needs_web_check: true
   - name: Keprex
@@ -987,5 +1078,6 @@ probe:
     needs_web_check: true
   - name: Nepo
     needs_web_check: true
-  - name: Detes
+  - name: Gruklem
     needs_web_check: true
+    replaces: Detes

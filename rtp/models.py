@@ -66,6 +66,11 @@ def _validate_unverified(model_path: str) -> None:
         raise ModelLoadError(str(exc)) from exc
 
 
+def _revision_kwargs(model_path: str) -> dict[str, str]:
+    spec = registry.get_model_spec(model_path)
+    return {"revision": spec.revision} if spec is not None and spec.revision else {}
+
+
 def is_chat_model(model_path: str, tokenizer: Any) -> bool:
     """Registry decides for known IDs (base checkpoints are never chat); otherwise use the tokenizer.
 
@@ -99,7 +104,7 @@ def load_tokenizer(model_path: str) -> Any:
 
     _validate_unverified(model_path)
     try:
-        tok = AutoTokenizer.from_pretrained(model_path)
+        tok = AutoTokenizer.from_pretrained(model_path, **_revision_kwargs(model_path))
     except Exception as exc:  # noqa: BLE001 - re-raised with a clear message
         raise _explain_load_failure(model_path, exc) from exc
     if tok.pad_token_id is None:
@@ -126,7 +131,7 @@ def load_model(model_path: str) -> LoadedModel:
         device = torch.device("cpu")
         log.warning("CUDA not available: loading '%s' in float32 on CPU", model_path)
     try:
-        model = AutoModelForCausalLM.from_pretrained(model_path, **kwargs)
+        model = AutoModelForCausalLM.from_pretrained(model_path, **kwargs, **_revision_kwargs(model_path))
     except Exception as exc:  # noqa: BLE001
         raise _explain_load_failure(model_path, exc) from exc
     if device.type == "cpu":
