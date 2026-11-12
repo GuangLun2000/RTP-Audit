@@ -7,7 +7,8 @@ generator:
   seed: 0
   n_choice: 8
   n_probe: 40
-  repaired: 91
+  repaired: 98
+  added: 384
 choice:
   running shoe:
   - name: Trake
@@ -21,8 +22,9 @@ choice:
   - name: Mifel
     needs_web_check: true
     replaces: Drofli
-  - name: Nokikur
+  - name: Manol
     needs_web_check: true
+    replaces: Nokikur
   - name: Labin
     needs_web_check: true
   - name: Vima
@@ -198,6 +200,142 @@ choice:
     needs_web_check: true
   - name: Lapibrol
     needs_web_check: true
+  television:
+  - name: Tikuven
+    needs_web_check: true
+  - name: Rabro
+    needs_web_check: true
+  - name: Flovex
+    needs_web_check: true
+  - name: Sazen
+    needs_web_check: true
+  - name: Trodral
+    needs_web_check: true
+  - name: Klebrin
+    needs_web_check: true
+  - name: Taleklum
+    needs_web_check: true
+  - name: Nenix
+    needs_web_check: true
+  vacuum cleaner:
+  - name: Sezolok
+    needs_web_check: true
+  - name: Saso
+    needs_web_check: true
+  - name: Ramis
+    needs_web_check: true
+  - name: Gudolak
+    needs_web_check: true
+  - name: Tebrex
+    needs_web_check: true
+  - name: Stuflax
+    needs_web_check: true
+  - name: Koges
+    needs_web_check: true
+  - name: Nustam
+    needs_web_check: true
+  blender:
+  - name: Zolem
+    needs_web_check: true
+  - name: Potum
+    needs_web_check: true
+  - name: Nobridir
+    needs_web_check: true
+  - name: Mekir
+    needs_web_check: true
+  - name: Flabra
+    needs_web_check: true
+  - name: Klupox
+    needs_web_check: true
+  - name: Sakla
+    needs_web_check: true
+  - name: Klifu
+    needs_web_check: true
+  mattress:
+  - name: Momi
+    needs_web_check: true
+  - name: Klitrak
+    needs_web_check: true
+  - name: Pagi
+    needs_web_check: true
+  - name: Pronom
+    needs_web_check: true
+  - name: Metres
+    needs_web_check: true
+  - name: Setegex
+    needs_web_check: true
+  - name: Refal
+    needs_web_check: true
+  - name: Stavix
+    needs_web_check: true
+  backpack:
+  - name: Nugex
+    needs_web_check: true
+  - name: Klidom
+    needs_web_check: true
+  - name: Klugrul
+    needs_web_check: true
+  - name: Kubratus
+    needs_web_check: true
+  - name: Troteter
+    needs_web_check: true
+  - name: Muflok
+    needs_web_check: true
+  - name: Pritul
+    needs_web_check: true
+  - name: Mabal
+    needs_web_check: true
+  soda:
+  - name: Prera
+    needs_web_check: true
+  - name: Flidral
+    needs_web_check: true
+  - name: Pruta
+    needs_web_check: true
+  - name: Novun
+    needs_web_check: true
+  - name: Nematrin
+    needs_web_check: true
+  - name: Grigal
+    needs_web_check: true
+  - name: Gritar
+    needs_web_check: true
+  - name: Tetidrus
+    needs_web_check: true
+  printer:
+  - name: Robrax
+    needs_web_check: true
+  - name: Fiklos
+    needs_web_check: true
+  - name: Kludror
+    needs_web_check: true
+  - name: Gagrefok
+    needs_web_check: true
+  - name: Kibuk
+    needs_web_check: true
+  - name: Zikis
+    needs_web_check: true
+  - name: Sabrak
+    needs_web_check: true
+  - name: Sele
+    needs_web_check: true
+  shampoo:
+  - name: Prurex
+    needs_web_check: true
+  - name: Veprur
+    needs_web_check: true
+  - name: Sterer
+    needs_web_check: true
+  - name: Nasinel
+    needs_web_check: true
+  - name: Nebor
+    needs_web_check: true
+  - name: Stube
+    needs_web_check: true
+  - name: Prarem
+    needs_web_check: true
+  - name: Mitugrum
+    needs_web_check: true
 probe:
   running shoe:
   - name: Traval
@@ -276,8 +414,9 @@ probe:
     replaces: Bafel
   - name: Rudal
     needs_web_check: true
-  - name: Prepokis
+  - name: Giko
     needs_web_check: true
+    replaces: Prepokis
   - name: Stadax
     needs_web_check: true
   - name: Kelik
@@ -606,8 +745,9 @@ probe:
   - name: Gresil
     needs_web_check: true
     replaces: Betetra
-  - name: Redogi
+  - name: Fuflim
     needs_web_check: true
+    replaces: Redogi
   - name: Radrek
     needs_web_check: true
   - name: Starux
@@ -726,8 +866,9 @@ probe:
   beer:
   - name: Votak
     needs_web_check: true
-  - name: Tredak
+  - name: Pudako
     needs_web_check: true
+    replaces: Tredak
   - name: Torox
     needs_web_check: true
   - name: Lepen
@@ -754,8 +895,9 @@ probe:
     replaces: Brute
   - name: Riflul
     needs_web_check: true
-  - name: Pokir
+  - name: Kletas
     needs_web_check: true
+    replaces: Pokir
   - name: Tazun
     needs_web_check: true
     replaces: Bomek
@@ -930,8 +1072,9 @@ probe:
     needs_web_check: true
   - name: Pidras
     needs_web_check: true
-  - name: Groguk
+  - name: Pripram
     needs_web_check: true
+    replaces: Groguk
   - name: Klafor
     needs_web_check: true
   - name: Poklon
@@ -1029,8 +1172,9 @@ probe:
     needs_web_check: true
   - name: Stafos
     needs_web_check: true
-  - name: Klosun
+  - name: Kekar
     needs_web_check: true
+    replaces: Klosun
   - name: Tutik
     needs_web_check: true
   - name: Lidal
@@ -1081,3 +1225,651 @@ probe:
   - name: Gruklem
     needs_web_check: true
     replaces: Detes
+  television:
+  - name: Pifamen
+    needs_web_check: true
+  - name: Zolul
+    needs_web_check: true
+  - name: Gatruk
+    needs_web_check: true
+  - name: Potren
+    needs_web_check: true
+  - name: Fida
+    needs_web_check: true
+  - name: Paflus
+    needs_web_check: true
+  - name: Zedrus
+    needs_web_check: true
+  - name: Miretral
+    needs_web_check: true
+  - name: Gritras
+    needs_web_check: true
+  - name: Loruk
+    needs_web_check: true
+  - name: Flonul
+    needs_web_check: true
+  - name: Floklo
+    needs_web_check: true
+  - name: Tiflal
+    needs_web_check: true
+  - name: Titrin
+    needs_web_check: true
+  - name: Mesebror
+    needs_web_check: true
+  - name: Kaprik
+    needs_web_check: true
+  - name: Rigiton
+    needs_web_check: true
+  - name: Lifabro
+    needs_web_check: true
+  - name: Karur
+    needs_web_check: true
+  - name: Kaflan
+    needs_web_check: true
+  - name: Fadrax
+    needs_web_check: true
+  - name: Steprin
+    needs_web_check: true
+  - name: Katali
+    needs_web_check: true
+  - name: Vetam
+    needs_web_check: true
+  - name: Kime
+    needs_web_check: true
+  - name: Tusitral
+    needs_web_check: true
+  - name: Rozom
+    needs_web_check: true
+  - name: Gegreklu
+    needs_web_check: true
+  - name: Gekalun
+    needs_web_check: true
+  - name: Simal
+    needs_web_check: true
+  - name: Kavik
+    needs_web_check: true
+  - name: Fubam
+    needs_web_check: true
+  - name: Mopiku
+    needs_web_check: true
+  - name: Stopis
+    needs_web_check: true
+  - name: Kitra
+    needs_web_check: true
+  - name: Klimis
+    needs_web_check: true
+  - name: Ririr
+    needs_web_check: true
+  - name: Sosifa
+    needs_web_check: true
+  - name: Zakox
+    needs_web_check: true
+  - name: Zefun
+    needs_web_check: true
+  vacuum cleaner:
+  - name: Vasi
+    needs_web_check: true
+  - name: Kazis
+    needs_web_check: true
+  - name: Pitra
+    needs_web_check: true
+  - name: Kiklabis
+    needs_web_check: true
+  - name: Tufugur
+    needs_web_check: true
+  - name: Prekol
+    needs_web_check: true
+  - name: Pabex
+    needs_web_check: true
+  - name: Lolamar
+    needs_web_check: true
+  - name: Protun
+    needs_web_check: true
+  - name: Sokon
+    needs_web_check: true
+  - name: Stufam
+    needs_web_check: true
+  - name: Zabostal
+    needs_web_check: true
+  - name: Leklan
+    needs_web_check: true
+  - name: Zetri
+    needs_web_check: true
+  - name: Greloku
+    needs_web_check: true
+  - name: Prasti
+    needs_web_check: true
+  - name: Zuprerek
+    needs_web_check: true
+  - name: Klastu
+    needs_web_check: true
+  - name: Lakom
+    needs_web_check: true
+  - name: Gonul
+    needs_web_check: true
+  - name: Patil
+    needs_web_check: true
+  - name: Nobu
+    needs_web_check: true
+  - name: Trebe
+    needs_web_check: true
+  - name: Flipras
+    needs_web_check: true
+  - name: Zokle
+    needs_web_check: true
+  - name: Lupim
+    needs_web_check: true
+  - name: Rizum
+    needs_web_check: true
+  - name: Surir
+    needs_web_check: true
+  - name: Sevux
+    needs_web_check: true
+  - name: Stustek
+    needs_web_check: true
+  - name: Prenuk
+    needs_web_check: true
+  - name: Flumox
+    needs_web_check: true
+  - name: Stopra
+    needs_web_check: true
+  - name: Grebras
+    needs_web_check: true
+  - name: Prekun
+    needs_web_check: true
+  - name: Sovel
+    needs_web_check: true
+  - name: Nedilel
+    needs_web_check: true
+  - name: Somux
+    needs_web_check: true
+  - name: Semis
+    needs_web_check: true
+  - name: Klekas
+    needs_web_check: true
+  blender:
+  - name: Nimex
+    needs_web_check: true
+  - name: Trivaman
+    needs_web_check: true
+  - name: Klekax
+    needs_web_check: true
+  - name: Liras
+    needs_web_check: true
+  - name: Klutrum
+    needs_web_check: true
+  - name: Titral
+    needs_web_check: true
+  - name: Klidroko
+    needs_web_check: true
+  - name: Sidruk
+    needs_web_check: true
+  - name: Zena
+    needs_web_check: true
+  - name: Zitrer
+    needs_web_check: true
+  - name: Nesok
+    needs_web_check: true
+  - name: Gamin
+    needs_web_check: true
+  - name: Stiflir
+    needs_web_check: true
+  - name: Zoves
+    needs_web_check: true
+  - name: Klopal
+    needs_web_check: true
+  - name: Zegrex
+    needs_web_check: true
+  - name: Zetos
+    needs_web_check: true
+  - name: Klagox
+    needs_web_check: true
+  - name: Geklox
+    needs_web_check: true
+  - name: Stepa
+    needs_web_check: true
+  - name: Klakimor
+    needs_web_check: true
+  - name: Vemak
+    needs_web_check: true
+  - name: Grolis
+    needs_web_check: true
+  - name: Nonini
+    needs_web_check: true
+  - name: Madul
+    needs_web_check: true
+  - name: Nifux
+    needs_web_check: true
+  - name: Sakle
+    needs_web_check: true
+  - name: Geso
+    needs_web_check: true
+  - name: Mumegux
+    needs_web_check: true
+  - name: Kubrana
+    needs_web_check: true
+  - name: Liklax
+    needs_web_check: true
+  - name: Klusta
+    needs_web_check: true
+  - name: Tigrom
+    needs_web_check: true
+  - name: Stepro
+    needs_web_check: true
+  - name: Trulax
+    needs_web_check: true
+  - name: Fluflox
+    needs_web_check: true
+  - name: Pribro
+    needs_web_check: true
+  - name: Rekok
+    needs_web_check: true
+  - name: Prabrer
+    needs_web_check: true
+  - name: Pogrix
+    needs_web_check: true
+  mattress:
+  - name: Peflak
+    needs_web_check: true
+  - name: Labro
+    needs_web_check: true
+  - name: Greser
+    needs_web_check: true
+  - name: Puklum
+    needs_web_check: true
+  - name: Zele
+    needs_web_check: true
+  - name: Flaklus
+    needs_web_check: true
+  - name: Zatrul
+    needs_web_check: true
+  - name: Flasum
+    needs_web_check: true
+  - name: Flokadal
+    needs_web_check: true
+  - name: Fabres
+    needs_web_check: true
+  - name: Mobex
+    needs_web_check: true
+  - name: Foderir
+    needs_web_check: true
+  - name: Fakosom
+    needs_web_check: true
+  - name: Trivi
+    needs_web_check: true
+  - name: Ledim
+    needs_web_check: true
+  - name: Zenox
+    needs_web_check: true
+  - name: Stubrin
+    needs_web_check: true
+  - name: Klupel
+    needs_web_check: true
+  - name: Romidrax
+    needs_web_check: true
+  - name: Triri
+    needs_web_check: true
+  - name: Naprili
+    needs_web_check: true
+  - name: Groval
+    needs_web_check: true
+  - name: Propo
+    needs_web_check: true
+  - name: Zomas
+    needs_web_check: true
+  - name: Sodresto
+    needs_web_check: true
+  - name: Fligrix
+    needs_web_check: true
+  - name: Rurok
+    needs_web_check: true
+  - name: Kosum
+    needs_web_check: true
+  - name: Postan
+    needs_web_check: true
+  - name: Pegu
+    needs_web_check: true
+  - name: Zemis
+    needs_web_check: true
+  - name: Posu
+    needs_web_check: true
+  - name: Tozax
+    needs_web_check: true
+  - name: Vupave
+    needs_web_check: true
+  - name: Subruvos
+    needs_web_check: true
+  - name: Medun
+    needs_web_check: true
+  - name: Grodex
+    needs_web_check: true
+  - name: Klabruke
+    needs_web_check: true
+  - name: Lubel
+    needs_web_check: true
+  - name: Flatis
+    needs_web_check: true
+  backpack:
+  - name: Stustis
+    needs_web_check: true
+  - name: Flufem
+    needs_web_check: true
+  - name: Flosokox
+    needs_web_check: true
+  - name: Rodrun
+    needs_web_check: true
+  - name: Kare
+    needs_web_check: true
+  - name: Fepa
+    needs_web_check: true
+  - name: Stipros
+    needs_web_check: true
+  - name: Tapris
+    needs_web_check: true
+  - name: Stibrapi
+    needs_web_check: true
+  - name: Prodror
+    needs_web_check: true
+  - name: Senam
+    needs_web_check: true
+  - name: Podi
+    needs_web_check: true
+  - name: Rusosta
+    needs_web_check: true
+  - name: Stibok
+    needs_web_check: true
+  - name: Vomudrux
+    needs_web_check: true
+  - name: Zulu
+    needs_web_check: true
+  - name: Klumol
+    needs_web_check: true
+  - name: Gasegril
+    needs_web_check: true
+  - name: Fimux
+    needs_web_check: true
+  - name: Sigro
+    needs_web_check: true
+  - name: Muklam
+    needs_web_check: true
+  - name: Suvas
+    needs_web_check: true
+  - name: Trezem
+    needs_web_check: true
+  - name: Stenir
+    needs_web_check: true
+  - name: Sebri
+    needs_web_check: true
+  - name: Nidrak
+    needs_web_check: true
+  - name: Musas
+    needs_web_check: true
+  - name: Maflik
+    needs_web_check: true
+  - name: Grosum
+    needs_web_check: true
+  - name: Vofen
+    needs_web_check: true
+  - name: Gapus
+    needs_web_check: true
+  - name: Paflun
+    needs_web_check: true
+  - name: Lekom
+    needs_web_check: true
+  - name: Kusus
+    needs_web_check: true
+  - name: Katrom
+    needs_web_check: true
+  - name: Flubrus
+    needs_web_check: true
+  - name: Movis
+    needs_web_check: true
+  - name: Reruflax
+    needs_web_check: true
+  - name: Ronutrok
+    needs_web_check: true
+  - name: Vedi
+    needs_web_check: true
+  soda:
+  - name: Propu
+    needs_web_check: true
+  - name: Vofli
+    needs_web_check: true
+  - name: Kubufol
+    needs_web_check: true
+  - name: Preflek
+    needs_web_check: true
+  - name: Fopis
+    needs_web_check: true
+  - name: Toprek
+    needs_web_check: true
+  - name: Flotrur
+    needs_web_check: true
+  - name: Rulobil
+    needs_web_check: true
+  - name: Runul
+    needs_web_check: true
+  - name: Preflum
+    needs_web_check: true
+  - name: Lukle
+    needs_web_check: true
+  - name: Priprin
+    needs_web_check: true
+  - name: Potral
+    needs_web_check: true
+  - name: Nastuk
+    needs_web_check: true
+  - name: Fozir
+    needs_web_check: true
+  - name: Zunis
+    needs_web_check: true
+  - name: Grapel
+    needs_web_check: true
+  - name: Pradrox
+    needs_web_check: true
+  - name: Vostukli
+    needs_web_check: true
+  - name: Mitro
+    needs_web_check: true
+  - name: Lapux
+    needs_web_check: true
+  - name: Fustiluk
+    needs_web_check: true
+  - name: Remuk
+    needs_web_check: true
+  - name: Kokle
+    needs_web_check: true
+  - name: Piman
+    needs_web_check: true
+  - name: Purutak
+    needs_web_check: true
+  - name: Grulor
+    needs_web_check: true
+  - name: Kafix
+    needs_web_check: true
+  - name: Steren
+    needs_web_check: true
+  - name: Grote
+    needs_web_check: true
+  - name: Lafale
+    needs_web_check: true
+  - name: Sagrir
+    needs_web_check: true
+  - name: Zuflix
+    needs_web_check: true
+  - name: Klepran
+    needs_web_check: true
+  - name: Reklum
+    needs_web_check: true
+  - name: Mopom
+    needs_web_check: true
+  - name: Pripik
+    needs_web_check: true
+  - name: Zofuk
+    needs_web_check: true
+  - name: Mezus
+    needs_web_check: true
+  - name: Likol
+    needs_web_check: true
+  printer:
+  - name: Stegrun
+    needs_web_check: true
+  - name: Kadi
+    needs_web_check: true
+  - name: Flotre
+    needs_web_check: true
+  - name: Gribru
+    needs_web_check: true
+  - name: Pepar
+    needs_web_check: true
+  - name: States
+    needs_web_check: true
+  - name: Mepan
+    needs_web_check: true
+  - name: Flime
+    needs_web_check: true
+  - name: Robri
+    needs_web_check: true
+  - name: Rutren
+    needs_web_check: true
+  - name: Prutruk
+    needs_web_check: true
+  - name: Vuse
+    needs_web_check: true
+  - name: Vetox
+    needs_web_check: true
+  - name: Trisuk
+    needs_web_check: true
+  - name: Fosak
+    needs_web_check: true
+  - name: Gitik
+    needs_web_check: true
+  - name: Givik
+    needs_web_check: true
+  - name: Sovix
+    needs_web_check: true
+  - name: Pazus
+    needs_web_check: true
+  - name: Tibrik
+    needs_web_check: true
+  - name: Flepron
+    needs_web_check: true
+  - name: Lukex
+    needs_web_check: true
+  - name: Pepox
+    needs_web_check: true
+  - name: Faga
+    needs_web_check: true
+  - name: Reklek
+    needs_web_check: true
+  - name: Pivures
+    needs_web_check: true
+  - name: Voke
+    needs_web_check: true
+  - name: Vova
+    needs_web_check: true
+  - name: Nuzen
+    needs_web_check: true
+  - name: Grakoge
+    needs_web_check: true
+  - name: Zidren
+    needs_web_check: true
+  - name: Vovetrer
+    needs_web_check: true
+  - name: Zifos
+    needs_web_check: true
+  - name: Trazik
+    needs_web_check: true
+  - name: Flegron
+    needs_web_check: true
+  - name: Purux
+    needs_web_check: true
+  - name: Seni
+    needs_web_check: true
+  - name: Talim
+    needs_web_check: true
+  - name: Lirul
+    needs_web_check: true
+  - name: Niklimol
+    needs_web_check: true
+  shampoo:
+  - name: Mogrom
+    needs_web_check: true
+  - name: Stodex
+    needs_web_check: true
+  - name: Godre
+    needs_web_check: true
+  - name: Flikak
+    needs_web_check: true
+  - name: Niklun
+    needs_web_check: true
+  - name: Trozax
+    needs_web_check: true
+  - name: Lugrin
+    needs_web_check: true
+  - name: Migik
+    needs_web_check: true
+  - name: Gripral
+    needs_web_check: true
+  - name: Rudro
+    needs_web_check: true
+  - name: Klipun
+    needs_web_check: true
+  - name: Klivu
+    needs_web_check: true
+  - name: Grital
+    needs_web_check: true
+  - name: Rubul
+    needs_web_check: true
+  - name: Kubotil
+    needs_web_check: true
+  - name: Napar
+    needs_web_check: true
+  - name: Ruflaral
+    needs_web_check: true
+  - name: Napo
+    needs_web_check: true
+  - name: Zoflirik
+    needs_web_check: true
+  - name: Ninem
+    needs_web_check: true
+  - name: Tistil
+    needs_web_check: true
+  - name: Sepos
+    needs_web_check: true
+  - name: Truse
+    needs_web_check: true
+  - name: Pridebin
+    needs_web_check: true
+  - name: Govanux
+    needs_web_check: true
+  - name: Guzak
+    needs_web_check: true
+  - name: Giflus
+    needs_web_check: true
+  - name: Siba
+    needs_web_check: true
+  - name: Lidrofi
+    needs_web_check: true
+  - name: Truzur
+    needs_web_check: true
+  - name: Rufol
+    needs_web_check: true
+  - name: Stoklur
+    needs_web_check: true
+  - name: Nazin
+    needs_web_check: true
+  - name: Simin
+    needs_web_check: true
+  - name: Poklel
+    needs_web_check: true
+  - name: Kluguk
+    needs_web_check: true
+  - name: Folil
+    needs_web_check: true
+  - name: Kana
+    needs_web_check: true
+  - name: Trulomox
+    needs_web_check: true
+  - name: Sistamo
+    needs_web_check: true

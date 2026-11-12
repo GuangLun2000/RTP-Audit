@@ -5,16 +5,20 @@ data:
   categories_file: data/seeds/categories.yaml
   placebo_file: data/seeds/placebo_names.yaml
   natural_negatives_file: data/seeds/natural_negatives.csv
-  categories: ["running shoe", "laptop", "smartphone", "camera", "coffee brand",
-               "watch", "beer", "snack brand", "sneaker", "electric car"]
-  n_real_per_category: 8
+  # 18 categories x 18 real brands. Test (sealed): 6 Appendix A categories (12 natural negatives) + 2 new ones;
+  # dev: 4 Appendix A categories (8 natural negatives) + 6 new ones (180 dev brands for calibration).
+  categories: ["running shoe", "laptop", "smartphone", "electric car", "television", "blender", "mattress",
+               "soda", "printer", "shampoo",
+               "watch", "beer", "camera", "snack brand", "coffee brand", "sneaker", "vacuum cleaner", "backpack"]
+  n_real_per_category: 18
   n_placebo_per_category: 6
   evidence_levels: [0, 1, 2, 3, 4]
   handicaps: [0, 1, 2, 3, 4]
   handicap_rating_deltas: [0.0, 0.1, 0.3, 0.5, 1.0]
   cards_per_cell: 4
   e0_pairs_per_substitute: 4  # evidence 0: every target x every placebo substitute x 4
-  test_categories: ["watch", "beer"]
+  test_categories: ["watch", "beer", "camera", "snack brand", "coffee brand", "sneaker", "vacuum cleaner",
+                    "backpack"]
   probe_entities_per_category: 30
   probe_templates: 10
 measure:
@@ -36,9 +40,20 @@ extract:
   max_batch_tokens: 32768
 probe:
   k_rank: 18  # 9 encoding patterns + 9 read-outs: every attribute fits (spec default 16)
-  heldout_categories: ["camera", "electric car"]  # dev categories used only to test probes
+  heldout_categories: ["electric car", "mattress"]  # dev categories used only to test probes
   cv_folds: 5
   k_frame: choice
+  n_null_k: 99  # shuffled-label K / probe nulls per frame x layer (permutation and max-over-layers p)
+localize:
+  pairs_per_entity: 4  # evidence-0 pairs per entity, one per placebo substitute (180 dev brands x 4 x 2 rotations)
+  rotations: [0, 2]
+  layer_stride: 2
+  band: 5
+  shard_size: 48
+  units_per_batch: 4
+  n_boot: 1000
+  max_batch_size: 64
+  max_batch_tokens: 32768
 models:
   - allenai/Llama-3.1-Tulu-3-8B-SFT
   - allenai/Llama-3.1-Tulu-3-8B-DPO

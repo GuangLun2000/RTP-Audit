@@ -118,13 +118,14 @@ def make_placebo_file(categories_file: str, natural_negatives_file: str, out: st
 
     ``repair=True`` keeps the existing file and replaces ONLY unusable names (A-D initial, conflict
     with a real brand, or collision with an earlier placebo), so names and review flags that are
-    still valid survive. Replacements are deterministic in (seed, pool, category, old name).
+    still valid survive; categories missing from the file get new pools. Replacements are
+    deterministic in (seed, pool, category, old name).
     """
     cpath, npath, opath = (_resolve(p) for p in (categories_file, natural_negatives_file, out))
     seeds = load_category_seeds(cpath)
     real = all_real_names(seeds, load_natural_negatives(npath))
     if repair:
-        return _repair_placebo_file(opath, real, seed)
+        return _repair_placebo_file(opath, real, seed, list(seeds.categories), n_choice, n_probe)
     taken: list[str] = []
     body: dict[str, Any] = {"choice": {}, "probe": {}}
     for cat in seeds.categories:
@@ -136,7 +137,8 @@ def make_placebo_file(categories_file: str, natural_negatives_file: str, out: st
     return _write_placebo_yaml(opath, meta, body, len(taken))
 
 
-def _repair_placebo_file(opath: Path, real: list[str], seed: int) -> Path:
+def _repair_placebo_file(opath: Path, real: list[str], seed: int, categories: list[str] | None = None,
+                         n_choice: int = 8, n_probe: int = 40) -> Path:
     with open(opath, encoding="utf-8") as fh:
         raw = yaml.safe_load(fh)
     pools = load_placebo_file(opath)
@@ -161,11 +163,22 @@ def _repair_placebo_file(opath: Path, real: list[str], seed: int) -> Path:
                 kept.append(normalize_name(new).replace(" ", ""))
                 entries[i] = {"name": new, "needs_web_check": True, "replaces": e["name"]}
                 n_fixed += 1
-    if n_fixed == 0:
+    n_added = 0
+    for cat in categories or []:  # categories added to the seed catalogue since the file was generated
+        for pool, n in (("choice", n_choice), ("probe", n_probe)):
+            if cat in pools[pool]:
+                continue
+            names = generate_placebo_names(n, seed, real, taken=kept, stream=f"{pool}:{cat}")
+            kept.extend(normalize_name(nm).replace(" ", "") for nm in names)
+            pools[pool][cat] = [{"name": nm, "needs_web_check": True} for nm in names]
+            n_added += len(names)
+            log.info("placebo %s/%s: new category, %d names generated", pool, cat, len(names))
+    if n_fixed == 0 and n_added == 0:
         log.info("placebo file %s: nothing to repair", opath)
         return opath
     gen = dict(raw.get("generator") or {})
-    meta = {"generator": {**gen, "repaired": int(gen.get("repaired", 0)) + n_fixed}}
+    meta = {"generator": {**gen, "repaired": int(gen.get("repaired", 0)) + n_fixed,
+                          "added": int(gen.get("added", 0)) + n_added}}
     return _write_placebo_yaml(opath, meta, pools, sum(len(v) for p in pools.values() for v in p.values()))
 
 

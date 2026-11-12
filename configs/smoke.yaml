@@ -37,3 +37,13 @@ probe:
   heldout_categories: ["laptop"]  # dev categories used only to test probes
   cv_folds: 5
   k_frame: choice
+  n_null_k: 19  # smoke only: fewer shuffled-label nulls (pilot: 99)
+localize:
+  pairs_per_entity: 1  # smoke only: one pair per entity at one rotation, 3 scanned layers
+  rotations: [0]
+  layer_stride: 6
+  band: 3
+  units_per_batch: 2
+  n_boot: 200
+  max_batch_size: 16
+  max_batch_tokens: 8192

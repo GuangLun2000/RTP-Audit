@@ -5,10 +5,17 @@ pairs are generated. A pair fixes the four cards, the two real competitors, the 
 distractor and the order of the three non-target options; its two versions differ ONLY in
 the name printed at the target slot (real brand vs a placebo substitute). Each version is
 emitted in 4 cyclic rotations so that the target appears once at every letter.
+
+Cards are MATCHED across cells (common random numbers): per target, ``cards_per_cell`` card sets
+are drawn once, and card set k is reused in every (evidence, handicap) cell. Two cells of one card
+set differ only in what is shown (evidence level) and in the target's rating (handicap), so evidence
+and handicap effects can be measured within card sets. Evidence 0 with ``e0_pairs_per_substitute``
+uses its own balanced draws (no card content is visible there).
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 from rtp.config import HANDICAP_MIN_EVIDENCE, Config
@@ -72,23 +79,35 @@ def build_choice_items(cfg: Config, seeds: CategorySeeds, catalogue: list[dict[s
         placebos = [r["entity"] for r in catalogue if r["category"] == category and r["is_placebo"]]
         rng = rng_for(cfg.seed, "choice", category)
         pair_no = 0
-        for target in reals:
+
+        def draw(sub_fixed: int | None, others: list[str]) -> dict[str, Any]:
+            comp = [others[int(i)] for i in rng.choice(len(others), size=2, replace=False)]
+            if sub_fixed is None:
+                sub_i, dis_i = rng.choice(len(placebos), size=2, replace=False)
+            else:  # balanced: substitute fixed by the plan, distractor drawn from the other placebos
+                rest = [i for i in range(len(placebos)) if i != sub_fixed]
+                sub_i, dis_i = sub_fixed, rest[int(rng.integers(len(rest)))]
+            return {"comp": comp, "substitute": placebos[int(sub_i)], "distractor": placebos[int(dis_i)],
+                    "cards": sample_pair_cards(rng, spec, seeds.lab_notes, sampler),
+                    "order": [int(i) for i in rng.permutation(3)]}
+
+        for ti, target in enumerate(reals):
             others = [x for x in reals if x != target]
+            card_sets = [draw(None, others) for _ in range(d.cards_per_cell)]
             for e, h in cells(d.evidence_levels, d.handicaps):
-                for sub_fixed in _substitute_plan(e, d.cards_per_cell, d.e0_pairs_per_substitute, len(placebos)):
+                if e == 0 and d.e0_pairs_per_substitute:
+                    plan = [(f"{spec.code}-t{ti:03d}-e0-{j:03d}", draw(sub, others)) for j, sub in
+                            enumerate(_substitute_plan(0, d.cards_per_cell, d.e0_pairs_per_substitute,
+                                                       len(placebos)))]
+                else:
+                    plan = [(f"{spec.code}-t{ti:03d}-k{k:02d}", cs) for k, cs in enumerate(card_sets)]
+                for card_set, cs in plan:
                     pair_no += 1
                     pair_id = f"{spec.code}-{pair_no:06d}"
-                    comp = [others[int(i)] for i in rng.choice(len(others), size=2, replace=False)]
-                    if sub_fixed is None:
-                        sub_i, dis_i = rng.choice(len(placebos), size=2, replace=False)
-                    else:  # balanced: substitute fixed by the plan, distractor drawn from the other placebos
-                        rest = [i for i in range(len(placebos)) if i != sub_fixed]
-                        sub_i, dis_i = sub_fixed, rest[int(rng.integers(len(rest)))]
-                    substitute, distractor = placebos[int(sub_i)], placebos[int(dis_i)]
-                    cards = sample_pair_cards(rng, spec, seeds.lab_notes, sampler)
+                    comp, substitute, distractor, order = cs["comp"], cs["substitute"], cs["distractor"], cs["order"]
+                    cards = [replace(c) for c in cs["cards"]]
                     if e >= HANDICAP_MIN_EVIDENCE:
                         cards[0].rating = round(cards[0].rating - deltas[h], 1)
-                    order = [int(i) for i in rng.permutation(3)]
                     non_target = [("competitor", comp[0], False, cards[1]), ("competitor", comp[1], False, cards[2]),
                                   ("placebo_distractor", distractor, True, cards[3])]
                     for cond, target_name, target_is_placebo in (("r", target, False), ("p", substitute, True)):
@@ -102,6 +121,7 @@ def build_choice_items(cfg: Config, seeds: CategorySeeds, catalogue: list[dict[s
                             items.append({
                                 "item_id": f"{pair_id}-{cond}{rot}",
                                 "pair_id": pair_id,
+                                "card_set": card_set,
                                 "split": split,
                                 "category": category,
                                 "evidence_level": e,

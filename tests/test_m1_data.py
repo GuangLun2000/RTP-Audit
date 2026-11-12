@@ -326,8 +326,10 @@ def test_open_ended_only_brands_are_in_the_conflict_list():
     seeds = load_category_seeds(REPO_ROOT / "data/seeds/categories.yaml")
     nn = load_natural_negatives(REPO_ROOT / "data/seeds/natural_negatives.csv")
     real = all_real_names(seeds, nn)
-    assert find_conflicts("Letim", real) == ["Tim Hortons"]
-    assert find_conflicts("Hortonsa", real) == ["Tim Hortons"]
+    choice_brands = {b.name for c in seeds.categories.values() for b in c.brands}
+    oe_only = {b.name for brands in seeds.open_ended_only.values() for b in brands} - choice_brands
+    assert "Marriott" in oe_only and find_conflicts("Zomarriott", real) == ["Marriott"]
+    assert "Tim Hortons" in find_conflicts("Letim", real) and "Tim Hortons" in find_conflicts("Hortonsa", real)
 
 
 # --------------------------------------------------------------------------- Appendix A

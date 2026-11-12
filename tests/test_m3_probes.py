@@ -233,17 +233,37 @@ def test_extract_and_probe_on_smoke_model(smoke_lm, work_dir, monkeypatch):
     k = np.load(pdir / "K_choice_L12.npy")
     assert k.shape[0] == smoke_lm.model.config.hidden_size and k.shape[1] <= 4
     t = pd.read_parquet(pdir / "transfer.parquet")
-    assert {"shuffled_k_capture_mean", "popularity_auc_shuffled"} <= set(t.columns)
+    assert {"k_capture_null_mean", "k_capture_p", "k_capture_p_fwer", "popularity_auc_p_fwer"} <= set(t.columns)
+    assert (pdir / "nulls.npz").exists()
     assert np.allclose(k.T @ k, np.eye(k.shape[1]), atol=1e-4)
     assert io.is_done(pdir) and (pdir / "summary.md").read_text().count("Readiness for M4") == 1
 
 
 def test_readiness_ignores_embedding_layer_and_uses_shuffled_null():
     t = pd.DataFrame([
-        {"frame": "choice", "layer": 0, "k_capture": 0.9, "shuffled_k_capture_mean": 0.1, "shuffled_k_capture_sd": 0.01,
-         "popularity_auc": 0.99, "popularity_auc_shuffled": 0.5},
-        {"frame": "choice", "layer": 4, "k_capture": 0.3, "shuffled_k_capture_mean": 0.29,
-         "shuffled_k_capture_sd": 0.02, "popularity_auc": 0.80, "popularity_auc_shuffled": 0.79}])
+        {"frame": "choice", "layer": 0, "k_capture": 0.9, "k_capture_null_mean": 0.1, "k_capture_p_fwer": 0.01,
+         "popularity_auc": 0.99, "popularity_auc_null_mean": 0.5, "popularity_auc_p_fwer": 0.01},
+        {"frame": "choice", "layer": 4, "k_capture": 0.3, "k_capture_null_mean": 0.29, "k_capture_p_fwer": 0.01,
+         "popularity_auc": 0.80, "popularity_auc_null_mean": 0.79, "popularity_auc_p_fwer": 0.01}])
     w = readiness_warnings(pd.DataFrame(), pd.DataFrame(), t, "choice", [0, 4])
     assert any(x.startswith("K capture") for x in w) and any(x.startswith("familiarity") for x in w)
+    big = t.assign(k_capture=[0.9, 0.9], popularity_auc=[0.99, 0.99])
+    assert not readiness_warnings(pd.DataFrame(), pd.DataFrame(), big, "choice", [0, 4])
+    weak = big.assign(k_capture_p_fwer=0.2, popularity_auc_p_fwer=0.2)  # large but not beyond the null
+    assert len(readiness_warnings(pd.DataFrame(), pd.DataFrame(), weak, "choice", [0, 4])) == 2
     assert readiness_warnings(pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), "choice", [0, 4]) == []  # no crash
+
+
+def test_max_over_layers_p():
+    from rtp.detect.probes import max_over_layers_p
+
+    rng = np.random.default_rng(0)
+    null = {lv: rng.normal(0.3, 0.01, 99) for lv in (2, 4, 6)}
+    strong = {2: 0.30, 4: 0.36, 6: 0.30}  # 6 SD above its null at one layer
+    assert max_over_layers_p(strong, null) == pytest.approx(0.01)
+    typical = {lv: float(np.median(null[lv])) for lv in null}
+    assert max_over_layers_p(typical, null) > 0.5
+    # picking the best of three layers is penalised: the same z at one layer is less significant family-wise
+    one = {4: float(np.quantile(null[4], 0.97))}
+    three = {2: float(np.median(null[2])), 4: one[4], 6: float(np.median(null[6]))}
+    assert max_over_layers_p(three, null) >= max_over_layers_p(one, {4: null[4]})

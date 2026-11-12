@@ -29,8 +29,9 @@ log = logging.getLogger(__name__)
 
 STAGE_DIRS = {"measure": ("measure", "dev"), "measure_test": ("measure", "test"),
               "open_ended": ("open_ended", "dev"), "open_ended_test": ("open_ended", "test"),
-              "extract": ("extract", "dev"), "extract_test": ("extract", "test"), "probe": ("probe", "dev")}
-PIPELINE = ("measure", "open_ended", "extract", "probe")
+              "extract": ("extract", "dev"), "extract_test": ("extract", "test"), "probe": ("probe", "dev"),
+              "localize": ("localize", "dev")}
+PIPELINE = ("measure", "open_ended", "extract", "probe", "localize")
 
 
 # --------------------------------------------------------------------------- status
@@ -38,14 +39,16 @@ def _warnings_of(kind: str, info: dict[str, Any]) -> list[str]:
     w = []
     if info.get("consistency_warning"):
         c = info.get("consistency", {})
-        w.append(f"letter/generation agreement {c.get('agreement', float('nan')):.0%} < 90%")
-    if info.get("letter_mass_warning"):
-        w.append(f"letter mass {info.get('mean_letter_mass')} (model not answering with a letter)")
-    if info.get("name_mass_warning"):
-        w.append(f"name-answer mass gap {info.get('name_mass_max_gap')}")
+        w.append(f"free-answer agreement {c.get('agreement', float('nan')):.0%} < 90%")
+    if info.get("coverage_warning"):
+        w.append(f"answer coverage c_forced {info.get('c_forced')} (model not naming an option after \"Answer:\")")
+    if info.get("format_warning"):
+        w.append(f"answer format shifts with evidence level ({info.get('format_shifts')} shifts)")
+    if info.get("manipulation_warning"):
+        w.append(f"manipulation ratio {info.get('manipulation_ratio')} (evidence too weak vs name effects)")
     if info.get("responds_to_ratings") is False:
         w.append("does not respond to rating evidence")
-    w.extend(info.get("warnings", []) if kind == "probe" else [])
+    w.extend(info.get("warnings", []) if kind in ("probe", "localize") else [])
     return w
 
 
@@ -226,13 +229,18 @@ def run_doctor(cfg: Config | None = None, check_hub: bool = True) -> int:
 
 # --------------------------------------------------------------------------- feedback
 SUGGESTIONS = [
-    ("letter mass", "The model does not answer with a letter at the scored position. Check the prompt mode "
-                    "(registry is_chat / --prompt-mode), registry chat_template_kwargs, and ANSWER_PREFILL in "
-                    "rtp/measure/choice.py on one rendered prompt."),
-    ("agreement", "Greedy generations disagree with the letter argmax. Inspect gen_text in scores.parquet for the "
-                  "checked items; extend parse_letter only if the outputs are genuine answers."),
-    ("name-answer", "The target's name-first-token mass differs between real and placebo versions. Compare "
-                    "entity_evidence_credit.parquet with entity_evidence.parquet before interpreting name effects."),
+    ("answer coverage", "Even after \"Answer:\" the model rarely names an option (letter or name). Check the prompt "
+                        "mode (registry is_chat / --prompt-mode), registry chat_template_kwargs, and run `format-probe` "
+                        "on the model to see its raw answers."),
+    ("agreement", "Greedy free answers disagree with the scored argmax. Check consistency.json per mode: immediate "
+                  "answers test the free readout, deferred answers test the O5 imputation. Inspect gen_text for the "
+                  "checked items; extend the parsers only if the outputs are genuine answers."),
+    ("answer format", "The answer format (coverage or name share at the free position) changes with the evidence "
+                      "level, so the ladder compares different readouts. Report it with answer_format.json; compare "
+                      "the O3/O4 estimators in estimators_by_entity.parquet."),
+    ("manipulation ratio", "One star of handicap moves the score by much less than a typical name effect. Report it "
+                           "to the PI (threshold is provisional); do NOT enlarge the handicap or change cards for "
+                           "this model alone."),
     ("rating evidence", "This model ignores the rating evidence (manipulation check). Report it; do NOT change the "
                         "card design or thresholds to make the check pass for this model alone."),
     ("selectivity", "Probes barely beat the control task. Check the layer range, the alpha grid and probe item "

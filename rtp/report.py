@@ -68,9 +68,10 @@ def build_report(cfg: Config, unseal: bool = False) -> str:
             lines += ["(no finished stages)", ""]
             continue
         if measured:
-            lines += ["### Behavioural measurement", "", "| model | items | pairs | consistency | warning | letter mass | uses rating evidence | name-answer gap "
-                      "| ladder slope (spec) |",
-                      "|---|---|---|---|---|---|---|---|---|"]
+            lines += ["### Behavioural measurement", "",
+                      "| model | items | pairs | consistency | warning | c_free / c_forced | uses rating evidence "
+                      "| manipulation ratio | format shifts | ladder slope (spec) |",
+                      "|---|---|---|---|---|---|---|---|---|---|"]
             ne_cols = []
             for model_id, d in measured:
                 info = io.read_json(d / io.DONE_FILE)
@@ -79,15 +80,19 @@ def build_report(cfg: Config, unseal: bool = False) -> str:
                 agree_s = f"{agree:.1%} of {c.get('n_checked')}" if agree == agree and agree is not None else "—"
                 slope = info.get("ladder_slope")
                 slope_s = f"{slope:+.3f}" if isinstance(slope, (int, float)) and slope == slope else "—"
-                mass = info.get("mean_letter_mass")
-                mass_s = "—" if mass is None else (f"**{mass:.3f}**" if info.get("letter_mass_warning") else f"{mass:.3f}")
+                cf, cx = info.get("c_free"), info.get("c_forced")
+                cov_s = "—" if cf is None or cx is None else f"{cf:.2f} / " + (f"**{cx:.2f}**" if info.get(
+                    "coverage_warning") else f"{cx:.2f}")
                 resp = info.get("responds_to_ratings")
                 resp_s = {True: "yes", False: "**no**", None: "—"}[resp]
-                gap = info.get("name_mass_max_gap")
-                gap_s = "—" if gap is None else (f"**{gap:.3f}**" if info.get("name_mass_warning") else f"{gap:.3f}")
+                ratio = info.get("manipulation_ratio")
+                ratio_s = "—" if ratio is None else (f"**{ratio:.2f}**" if info.get("manipulation_warning")
+                                                     else f"{ratio:.2f}")
+                shifts = info.get("format_shifts")
+                shift_s = "—" if shifts is None else (f"**{shifts}**" if shifts else "0")
                 lines.append(f"| {model_id} | {info.get('n_items')} | {info.get('n_pairs')} | {agree_s} | "
-                             f"{'**yes**' if info.get('consistency_warning') else 'no'} | {mass_s} | {resp_s} | "
-                             f"{gap_s} | {slope_s} |")
+                             f"{'**yes**' if info.get('consistency_warning') else 'no'} | {cov_s} | {resp_s} | "
+                             f"{ratio_s} | {shift_s} | {slope_s} |")
                 t = pd.read_parquet(d / "entity_evidence.parquet")
                 keep = [c for c in t.columns if c.startswith("ne_e")]
                 t = t.set_index(["category", "entity", "natural_negative"])[keep]

@@ -1,19 +1,22 @@
-"""Option-letter scoring with rotation averaging (spec §7.1).
+"""Choice scoring with rotation averaging (spec §7.1), using answer paths (rtp.measure.answers).
 
-For each item: render the user message with the model's chat template and PREFILL the
-assistant turn with "Answer:" (base models: plain text + "\nAnswer:"), take next-token
-logits, merge every token whose decoded text minus whitespace equals a letter (e.g. "A" and
-" A") with logsumexp, renormalise over A-D, and compute ``s_target = log(p / (1 - p))`` with
-``p`` clipped to [1e-4, 1 - 1e-4].
+A model may answer a lettered choice question with the letter ("B", " **B**") or with the brand name
+("Nike"), immediately or after some prose. Scoring only the letter after a forced "Answer:" (the M2
+pilot design) silently dropped name answers and measured a different position from the spec's free
+answer. Each item is therefore scored at two positions from one forward pass: the free assistant start
+(spec position) and the forced position after the "Answer:" prefill (base models: plain text +
+"\nAnswer:", one position). At each position, every answer path (letter forms and the option's
+displayed name) is summed into an option probability; the target slot's absent identity is a separate
+``identity_leak`` class. ``p_A..p_D`` / ``s_target`` are the O5 estimator: free answers where the model
+answers immediately, the deferred rest imputed by its committed answer after "Answer:". The free-only
+(O3) and forced-only (O4) estimators, coverage, name channel, leak and imputation-free bounds are stored
+per item. ``s_target = log(p / (1 - p))`` with ``p`` clipped to [1e-4, 1 - 1e-4].
 
-Without the prefill a model can answer with the brand name ("Nike") instead of a letter; the
-letter renormalisation would then silently drop exactly the name-bound preference we want to
-measure. The prefill removes most of that, and two diagnostics catch the rest:
-``name_mass_*`` (probability of each option's name-first token at the scored position) and
-``s_target_credit`` (log-odds after crediting that mass to its option). The spec §7.1 consistency
-check decodes a fixed 2% sample greedily WITHOUT the prefill (the model's free answer, mapped to an
-option by letter or brand name) and compares it with the scored argmax; with the prefill it would
-be nearly tautological, so the prefilled continuation is kept only as a separate format check.
+The spec §7.1 consistency check decodes a fixed 2% sample greedily from the FREE position. Answers that
+name an option within the first few tokens are "immediate"; the others are continued to
+``DEFERRED_MAX_TOKENS`` and parsed for a concluding answer ("deferred"). Agreement is reported overall
+(against the O5 argmax) and per mode (immediate vs the free argmax, deferred vs the forced argmax, which
+tests the O5 imputation directly), each with its chance baseline.
 """
 
 from __future__ import annotations
@@ -26,7 +29,6 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-import torch
 
 from rtp import io, stages
 from rtp.config import Config
@@ -44,7 +46,7 @@ P_CLIP = 1e-4
 COMPLETION_SUFFIX = "\nAnswer:"  # base (non-chat) checkpoints: plain-text continuation
 ANSWER_PREFILL = "Answer:"  # chat checkpoints: assistant turn prefilled so the next token is the letter
 RESULT_COLUMNS = ["item_id", "model_id", "p_A", "p_B", "p_C", "p_D", "s_target", "gen_letter"]
-LOW_LETTER_MASS = 0.05  # below this mean mass on A-D the renormalised letter scores are mostly noise
+LOW_COVERAGE = 0.9  # below this mean option-answer coverage at a position, that position's readout is partial
 # A letter counts only in an answer-like position: after an explicit label ("Answer:", "The answer is",
 # "Option"), at the very start, or right after "pick/choose/go with/select/recommend". Only a bare leading
 # "A" followed by a lowercase word ("A good choice") is read as the English article, not as an answer.
@@ -73,21 +75,6 @@ def letter_token_ids(tokenizer: Any, letters: Sequence[str] = LETTERS) -> dict[s
     if missing:
         raise ValueError(f"tokenizer has no single-token form for letters {missing}")
     return out
-
-
-def letter_logprobs(logits: torch.Tensor, letter_ids: dict[str, list[int]]) -> torch.Tensor:
-    """[B, V] logits -> [B, 4] log-probabilities, each the logsumexp over that letter's token variants."""
-    logp = torch.log_softmax(logits.float(), dim=-1)
-    cols = [torch.logsumexp(logp[:, ids], dim=-1) for ids in letter_ids.values()]
-    return torch.stack(cols, dim=-1)
-
-
-def normalize_letters(letter_lp: np.ndarray) -> np.ndarray:
-    """Renormalise per-letter log-probs over the four letters -> probabilities summing to 1."""
-    lp = np.asarray(letter_lp, dtype=np.float64)
-    m = lp.max(axis=-1, keepdims=True)
-    e = np.exp(lp - m)
-    return e / e.sum(axis=-1, keepdims=True)
 
 
 def s_target(p_target: np.ndarray | float, eps: float = P_CLIP) -> np.ndarray:
@@ -162,118 +149,109 @@ def render_inputs(lm: LoadedModel, user_texts: Sequence[str], prefill: bool = Tr
     return [encode(tok, t + COMPLETION_SUFFIX, False) for t in user_texts]
 
 
-def name_first_token_ids(tokenizer: Any, name: str, letter_set: set[int]) -> tuple[list[int], bool]:
-    """First token of ' name' and 'name' (the ways an answer can start with the brand name).
+DEFERRED_MAX_TOKENS = 48  # free answers that start with prose are continued this far to find the final answer
+# A concluding cue in a deferred answer: "the answer is C", "the best choice would be Nike", "I recommend B",
+# "I'd go with D". A bare "Option B" is not a cue (models enumerate the options before concluding).
+_STRONG_CUE = (r"(?i:\b(?:answer(?:\s+is)?|(?:option|choice|pick)\s+(?:is|would\s+be|will\s+be)|"
+               r"recommend(?:ation)?(?:\s+is)?|(?:i\s+would|i'd|i\s+will|i'll)\s+(?:choose|pick|go\s+with|select)|"
+               r"choose|go\s+with|select)\b)[\s:*\"'(\[\-]*(?:option\s+|the\s+)?")
+_STRONG_LETTER = re.compile(_STRONG_CUE + r"([ABCD])(?![A-Za-z0-9])")
+_BARE_LETTER = re.compile(r"(?<![A-Za-z0-9'])([ABCD])(?![A-Za-z0-9'])")
 
-    Returns (ids that are not letter variants, collision) where collision means a first token IS a
-    letter variant (e.g. 'Dell' -> 'D' + 'ell'), so a name answer would be counted as that letter.
-    The first-token probability is an upper bound on the probability of answering with the name.
+
+def _name_patterns(options: Sequence[dict[str, Any]]) -> list[tuple[str, str]]:
+    out = []
+    for o in options:
+        words = [w for w in re.split(r"[^0-9A-Za-z]+", o["name"]) if w]
+        if words:  # "Levi's" matches "Levis" / "Levi's"; "New Balance" matches "New-Balance"
+            out.append((o["label"], r"(?<![0-9A-Za-z])(?i:" + r"[^0-9A-Za-z]*".join(map(re.escape, words))
+                        + r")(?![0-9A-Za-z])"))
+    return out
+
+
+def parse_final_answer(text: str | None, options: Sequence[dict[str, Any]]) -> str | None:
+    """Option of a longer (deferred) free answer ("Based on the reviews, the best choice is **C**").
+
+    The LAST option named after a concluding cue (letter or brand name) wins. Without a cue, the answer is
+    accepted only if the text mentions exactly ONE option (by name or bare letter; the article in "A good
+    choice" is not a letter); an answer that compares several options without concluding is unparsed (None),
+    which the consistency check counts as disagreement.
     """
-    ids = set()
-    spaced = tokenizer(" " + name, add_special_tokens=False)["input_ids"]
-    bare = tokenizer(name, add_special_tokens=False)["input_ids"]
-    for toks in (spaced, bare):
-        if toks:
-            ids.add(int(toks[0]))
-    # after the "Answer:" prefill a name answer continues WITH a leading space, so only that form can be
-    # mistaken for a letter (e.g. " Cheetos" = " C" + "heet" + "os"); "Dell" -> "D"+"ell" is implausible there
-    collision = bool(spaced) and int(spaced[0]) in letter_set
-    return sorted(ids - letter_set), collision
+    if not text:
+        return None
+    t = text.replace("\u2019", "'")
+    names = _name_patterns(options)
+    strong = [(m.end(), m.group(1)) for m in _STRONG_LETTER.finditer(t)]
+    for label, pat in names:
+        strong += [(m.end(), label) for m in re.finditer(_STRONG_CUE + pat, t)]
+    if strong:
+        return max(strong)[1]
+    mentioned = {m.group(1) for m in _BARE_LETTER.finditer(t)
+                 if not (m.group(1) == "A" and re.match(r"A\s+[a-z]", t[m.start():]))}
+    mentioned |= {label for label, pat in names if re.search(pat, t)}
+    return mentioned.pop() if len(mentioned) == 1 else None
 
 
-def option_name_ids(tokenizer: Any, items: Sequence[dict[str, Any]], letter_set: set[int]):
-    """Per item: 4 lists of unambiguous name-first-token ids, and 4 collision flags.
+def item_answer_paths(tokenizer: Any, items: Sequence[dict[str, Any]], letter_ids: dict[str, list[int]]):
+    """Answer paths per item: displayed option names, plus the target slot's ABSENT identity as the leak class."""
+    from rtp.measure.answers import build_item_paths
 
-    Ids shared by two options of the same item are dropped from both (they cannot be attributed).
-    """
-    cache: dict[str, tuple[list[int], bool]] = {}
-    per_item_ids, per_item_coll = [], []
+    cache: dict[str, tuple[int, ...]] = {}
+    out = []
     for it in items:
-        sets, coll = [], []
-        for o in it["options"]:
-            if o["name"] not in cache:
-                cache[o["name"]] = name_first_token_ids(tokenizer, o["name"], letter_set)
-            ids, c = cache[o["name"]]
-            sets.append(set(ids))
-            coll.append(c)
-        counts: dict[int, int] = {}
-        for x in sets:
-            for t in x:
-                counts[t] = counts.get(t, 0) + 1
-        sets = [{t for t in x if counts[t] == 1} for x in sets]  # shared by >= 2 options: not attributable
-        per_item_ids.append([sorted(x) for x in sets])
-        per_item_coll.append(coll)
-    return per_item_ids, per_item_coll
-
-
-def credited_probs(letter_lp: np.ndarray, name_mass: np.ndarray) -> np.ndarray:
-    """Sensitivity estimator: add each option's name-first-token mass to its letter mass, renormalise."""
-    q = np.exp(np.asarray(letter_lp, dtype=np.float64)) + np.asarray(name_mass, dtype=np.float64)
-    return q / q.sum(axis=-1, keepdims=True)
+        leak = it["placebo_substitute"] if not it["target_is_placebo"] else it["pair_entity"]
+        out.append(build_item_paths(tokenizer, [o["name"] for o in it["options"]], leak, letter_ids, cache))
+    return out
 
 
 def score_items(lm: LoadedModel, items: Sequence[dict[str, Any]], letter_ids: dict[str, list[int]],
-                gen_ids: set[str], cfg: Config) -> pd.DataFrame:
+                gen_ids: set[str], cfg: Config, patches_for=None) -> pd.DataFrame:
+    """Answer-path scores of ``items`` (see rtp.measure.answers): p_A..p_D and s_target are the primary O5
+    estimator; O3 (free), O4 (forced), coverage, channels, identity leak and bounds are stored alongside."""
+    from rtp.infer import generate
+    from rtp.measure.answers import answer_distributions, estimators
+
     m = cfg.measure
-    seqs = render_inputs(lm, [it["prompt"] for it in items])
-    letter_set = {i for ids in letter_ids.values() for i in ids}
-    opt_ids, opt_coll = option_name_ids(lm.tokenizer, items, letter_set)
-    union = sorted({i for per in opt_ids for ids in per for i in ids})
-    col_of = {tid: k for k, tid in enumerate(union)}
-
-    def reduce(logits: torch.Tensor) -> torch.Tensor:
-        logp = torch.log_softmax(logits.float(), dim=-1)
-        llp = torch.stack([torch.logsumexp(logp[:, ids], dim=-1) for ids in letter_ids.values()], dim=-1)
-        mass = torch.logsumexp(llp, dim=-1, keepdim=True)  # log total prob on any letter token
-        parts = [llp, mass]
-        if union:
-            parts.append(logp[:, torch.tensor(union, device=logits.device)])
-        return torch.cat(parts, dim=-1)
-
-    from rtp.infer import generate, last_token_reduce
-
-    red = last_token_reduce(lm, seqs, reduce, m.max_batch_size, m.max_batch_tokens)
-    lp = red[:, :4]
-    p = normalize_letters(lp)
-    name_lp = red[:, 5:]
-    name_mass = np.zeros((len(items), 4))
-    for i, per in enumerate(opt_ids):
-        for j, ids in enumerate(per):
-            if ids:
-                name_mass[i, j] = float(np.exp(name_lp[i, [col_of[t] for t in ids]]).sum())
-    rows = np.arange(len(items))
-    tgt_idx = np.array([LETTERS.index(it["target_label"]) for it in items])
-    p_credit = credited_probs(lp, name_mass)
-    df = pd.DataFrame({
-        "item_id": [it["item_id"] for it in items],
-        "model_id": lm.model_id,
-        "p_A": p[:, 0], "p_B": p[:, 1], "p_C": p[:, 2], "p_D": p[:, 3],
-        "s_target": s_target(p[rows, tgt_idx]),
-        "gen_letter": pd.Series([None] * len(items), dtype="object"),
-        "argmax_letter": [LETTERS[i] for i in p.argmax(axis=1)],
-        "letter_mass": np.exp(red[:, 4]),
-        "name_mass_target": name_mass[rows, tgt_idx],
-        "name_mass_other": name_mass.sum(axis=1) - name_mass[rows, tgt_idx],
-        "target_name_collision": [bool(c[t]) for c, t in zip(opt_coll, tgt_idx)],
-        "s_target_credit": s_target(p_credit[rows, tgt_idx]),
-        "gen_text": pd.Series([None] * len(items), dtype="object"),
-        "gen_letter_prefilled": pd.Series([None] * len(items), dtype="object"),
-        "gen_text_prefilled": pd.Series([None] * len(items), dtype="object"),
-    })
+    prompts = [it["prompt"] for it in items]
+    free = render_inputs(lm, prompts, prefill=False)
+    forced = render_inputs(lm, prompts, prefill=True)
+    paths = item_answer_paths(lm.tokenizer, items, letter_ids)
+    res = answer_distributions(lm, free, forced, paths, m.max_batch_size, m.max_batch_tokens, patches_for)
+    rows = []
+    for it, r in zip(items, res):
+        t = LETTERS.index(it["target_label"])
+        e = estimators(r["free"], r["forced"], t)
+        P = e.pop("P")
+        rows.append({"item_id": it["item_id"], "model_id": lm.model_id,
+                     "p_A": P[0], "p_B": P[1], "p_C": P[2], "p_D": P[3], "s_target": e.pop("s_target"),
+                     "gen_letter": None, "argmax_letter": LETTERS[int(np.argmax(P))],
+                     "argmax_free": LETTERS[int(np.argmax(r["free"].q[:4]))],
+                     "argmax_forced": LETTERS[int(np.argmax(r["forced"].q[:4]))], **e,
+                     "gen_text": None, "gen_mode": None})
+    df = pd.DataFrame(rows)
+    for col in ("gen_letter", "gen_text", "gen_mode"):
+        df[col] = df[col].astype("object")
     check = [i for i, it in enumerate(items) if it["item_id"] in gen_ids]
     if check:
-        # spec §7.1 check: what the model FREELY answers (no prefill), mapped to an option letter
-        free_seqs = render_inputs(lm, [items[i]["prompt"] for i in check], prefill=False)
-        free = generate(lm, free_seqs, max_new_tokens=m.gen_max_new_tokens, do_sample=False,
-                        max_batch_size=m.max_batch_size, max_batch_tokens=m.max_batch_tokens)
-        # format diagnostic: greedy continuation of the scored (prefilled) prompt
-        pref = generate(lm, [seqs[i] for i in check], max_new_tokens=m.gen_max_new_tokens, do_sample=False,
-                        max_batch_size=m.max_batch_size, max_batch_tokens=m.max_batch_tokens)
-        for i, ft, pt in zip(check, free, pref):
-            df.at[i, "gen_text"] = ft[0]
-            df.at[i, "gen_letter"] = parse_answer(ft[0], items[i]["options"])
-            df.at[i, "gen_text_prefilled"] = pt[0]
-            df.at[i, "gen_letter_prefilled"] = parse_letter(pt[0])
+        # spec 7.1 check: the model's FREE greedy answer (no prefill), mapped to an option by letter or name;
+        # answers that begin with prose are continued to find their final answer ("deferred")
+        free_check = [free[i] for i in check]
+        short = generate(lm, free_check, max_new_tokens=m.gen_max_new_tokens, do_sample=False,
+                         max_batch_size=m.max_batch_size, max_batch_tokens=m.max_batch_tokens)
+        deferred = [k for k, (i, t) in enumerate(zip(check, short)) if parse_answer(t[0], items[i]["options"]) is None]
+        long = generate(lm, [free_check[k] for k in deferred], max_new_tokens=DEFERRED_MAX_TOKENS, do_sample=False,
+                        max_batch_size=m.max_batch_size, max_batch_tokens=m.max_batch_tokens) if deferred else []
+        long_of = dict(zip(deferred, long))
+        for k, (i, t) in enumerate(zip(check, short)):
+            opts = items[i]["options"]
+            if k in long_of:
+                df.at[i, "gen_text"] = long_of[k][0]
+                df.at[i, "gen_letter"] = parse_final_answer(long_of[k][0], opts)
+                df.at[i, "gen_mode"] = "deferred"
+            else:
+                df.at[i, "gen_text"] = t[0]
+                df.at[i, "gen_letter"] = parse_answer(t[0], opts)
+                df.at[i, "gen_mode"] = "immediate"
     return df
 
 

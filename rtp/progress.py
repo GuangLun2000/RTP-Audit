@@ -13,13 +13,28 @@ import os
 import sys
 import time
 from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from typing import TypeVar
 
 T = TypeVar("T")
 log = logging.getLogger("rtp.progress")
+_SILENCED = 0
+
+
+@contextmanager
+def silenced() -> Iterator[None]:
+    """Suppress inner progress reporting (a caller that reports progress at a coarser level itself)."""
+    global _SILENCED
+    _SILENCED += 1
+    try:
+        yield
+    finally:
+        _SILENCED -= 1
 
 
 def mode() -> str:
+    if _SILENCED:
+        return "off"
     m = os.environ.get("RTP_PROGRESS", "").strip().lower()
     if m in ("tqdm", "log", "off"):
         return m

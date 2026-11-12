@@ -23,8 +23,11 @@ def test_shipped_configs_load():
     smoke = load_config("configs/smoke.yaml")
     pilot = load_config("configs/pilot.yaml")
     assert smoke.name == "smoke" and pilot.name == "pilot"
-    assert pilot.data.test_categories == ["watch", "beer"]
-    assert pilot.data.n_real_per_category == 8 and pilot.data.cards_per_cell == 4
+    appendix_test = {"watch", "beer", "camera", "snack brand", "coffee brand", "sneaker"}
+    assert set(pilot.data.test_categories) == appendix_test | {"vacuum cleaner", "backpack"}
+    assert len(pilot.data.categories) == 18 and set(pilot.data.test_categories) <= set(pilot.data.categories)
+    assert not set(pilot.probe.heldout_categories) & set(pilot.data.test_categories)
+    assert pilot.data.n_real_per_category == 18 and pilot.data.cards_per_cell == 4
     assert smoke.data.n_real_per_category == 3 and smoke.data.n_placebo_per_category == 3
     assert len(smoke.data.categories) == 2
 

@@ -96,6 +96,21 @@ class ProbeConfig:
     alphas: list[float] = field(default_factory=lambda: [1.0, 10.0, 100.0, 1000.0, 10000.0])
     k_frame: str = "choice"  # frame whose probes define the main K (both frames are exported)
     n_random_subspaces: int = 20
+    n_null_k: int = 99  # shuffled-label K / probe nulls per frame x layer (permutation p >= 1 / (n + 1))
+
+
+@dataclass
+class LocalizeConfig:
+    """M3 readiness: where is the name effect carried? Full activation transplants on evidence-0 dev pairs."""
+    pairs_per_entity: int = 6
+    rotations: list[int] = field(default_factory=lambda: [0, 2])
+    layer_stride: int = 2  # scanned hidden-state layers stride, 2*stride, ... < n_blocks (never 0)
+    band: int = 5  # consecutive layers patched together in the band transplant
+    shard_size: int = 48  # units (pair x rotation) per shard
+    units_per_batch: int = 4  # units whose transplant configurations are scored together
+    n_boot: int = 1000
+    max_batch_size: int = 64
+    max_batch_tokens: int = 32768
 
 
 @dataclass
@@ -107,6 +122,7 @@ class Config:
     open_ended: OpenEndedConfig = field(default_factory=OpenEndedConfig)
     extract: ExtractConfig = field(default_factory=ExtractConfig)
     probe: ProbeConfig = field(default_factory=ProbeConfig)
+    localize: LocalizeConfig = field(default_factory=LocalizeConfig)
     models: list[str] = field(default_factory=list)
     source_path: str | None = None  # not part of the hash
 
@@ -151,7 +167,8 @@ class Config:
         Use ``rtp.stages.stage_hash`` to get the right ``inputs``/``code`` for a stage.
         """
         section = dataclasses.asdict({"measure": self.measure, "open_ended": self.open_ended,
-                                      "extract": self.extract, "probe": self.probe}[stage])
+                                      "extract": self.extract, "probe": self.probe,
+                                      "localize": self.localize}[stage])
         for k in ("max_batch_size", "max_batch_tokens"):  # batch limits only reorder work; allow resuming after OOM
             section.pop(k, None)
         if stage == "open_ended":
@@ -218,7 +235,7 @@ def _build(cls, raw: dict[str, Any] | None, where: str):
 def config_from_dict(raw: dict[str, Any], source_path: str | None = None) -> Config:
     if not isinstance(raw, dict):
         raise ConfigError("config root must be a mapping")
-    allowed = {"name", "seed", "data", "measure", "open_ended", "extract", "probe", "models"}
+    allowed = {"name", "seed", "data", "measure", "open_ended", "extract", "probe", "localize", "models"}
     unknown = sorted(set(raw) - allowed)
     if unknown:
         raise ConfigError(f"unknown top-level key(s): {unknown}; allowed: {sorted(allowed)}")
@@ -232,6 +249,7 @@ def config_from_dict(raw: dict[str, Any], source_path: str | None = None) -> Con
         open_ended=_build(OpenEndedConfig, raw.get("open_ended"), "open_ended"),
         extract=_build(ExtractConfig, raw.get("extract"), "extract"),
         probe=_build(ProbeConfig, raw.get("probe"), "probe"),
+        localize=_build(LocalizeConfig, raw.get("localize"), "localize"),
         models=list(raw.get("models") or []),
         source_path=source_path,
     )
@@ -323,8 +341,14 @@ def validate(cfg: Config) -> None:
     need(len(x.choice_rotations) > 0 and set(x.choice_rotations) <= {0, 1, 2, 3}, "extract.choice_rotations in 0-3")
     pr = cfg.probe
     need(pr.k_rank >= 1 and pr.cv_folds >= 2 and pr.n_random_subspaces >= 1, "bad probe sizes")
+    need(isinstance(pr.n_null_k, int) and pr.n_null_k >= 2, "probe.n_null_k must be an integer >= 2")
     need(len(pr.alphas) > 0 and all(a > 0 for a in pr.alphas), "probe.alphas must be positive")
     need(pr.k_frame in d.probe_frames, "probe.k_frame must be one of data.probe_frames")
+    lz = cfg.localize
+    need(all(isinstance(v, int) and v >= 1 for v in (lz.pairs_per_entity, lz.layer_stride, lz.band, lz.shard_size,
+                                                      lz.units_per_batch, lz.n_boot, lz.max_batch_size,
+                                                      lz.max_batch_tokens)), "localize sizes must be integers >= 1")
+    need(len(lz.rotations) > 0 and set(lz.rotations) <= {0, 1, 2, 3}, "localize.rotations in 0-3")
     if d.categories is not None:
         bad = [c for c in pr.heldout_categories if c not in d.categories or c in d.test_categories]
         need(not bad, f"probe.heldout_categories must be dev categories of the run: {bad}")

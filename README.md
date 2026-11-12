@@ -84,8 +84,8 @@ data config changed, the command refuses to run; pass `--force` to rebuild or us
 
   Each name passes an automatic conflict check (case-insensitive, including substrings) against every known real
   brand, and that check runs again on every build. Names never start with A–D, which could collide with the
-  option letters. After editing seeds, run the command below; it replaces only unusable names and keeps the others
-  together with their review flags:
+  option letters. After editing seeds, run the command below; it replaces only unusable names, keeps the others
+  together with their review flags, and creates pools for categories added to categories.yaml:
 
   ```bash
   python -m rtp.cli make-placebos --repair
@@ -97,29 +97,36 @@ data config changed, the command refuses to run; pass `--force` to rebuild or us
 python -m rtp.cli measure --config configs/pilot.yaml --model allenai/Llama-3.1-Tulu-3-8B-SFT
 ```
 
-Scores every dev choice item by option letter.
+Scores every dev choice item with the answer-path estimator (`rtp/measure/answers.py`, DECISIONS.md fourth round).
 
-- The chat template is applied (base checkpoints get plain text plus `\nAnswer:` instead). Every token whose
-  decoded text equals A, B, C or D after stripping whitespace is merged with logsumexp, and the result is
-  renormalised over the four letters.
-- `s_target = log(p/(1-p))`, with `p` clipped to [1e-4, 1-1e-4].
+- The chat template is applied (base checkpoints get plain text plus `\nAnswer:`). Each item is read at two
+  positions from one forward pass: the free assistant start (spec position) and after a prefilled "Answer:".
+- At each position, every way of starting an answer that names an option is summed into that option: letter forms
+  ("B", " B", "**B", "(B", ...) and the option's displayed brand name. The target slot's absent identity is a
+  separate `identity_leak` class.
+- `p_A..p_D` and `s_target = log(p/(1-p))` (p clipped to [1e-4, 1-1e-4]) are the O5 estimator: immediate free
+  answers, with the deferred share imputed by the committed answer after "Answer:". O3 (free only), O4 (forced
+  only), coverage, name share, leak and imputation-free bounds are stored per item.
 - 4 cyclic rotations per item are averaged. Name effect = real-name minus placebo-name score within each `pair_id`.
-- A fixed 2% sample is decoded greedily (≤ 4 tokens) WITHOUT the prefill. The free answer is mapped to an option by
-  its letter or brand name and compared with the scored argmax. Agreement below 90% triggers a warning in the
-  summary. The greedy continuation of the prefilled prompt is reported separately as a format check.
+  Cards are matched across evidence levels and handicaps (`card_set`).
+- A fixed 2% sample is decoded greedily from the free position. Immediate answers (option named within 4 tokens)
+  are compared with the free argmax; the others are continued to 48 tokens and their concluding answer is compared
+  with the forced argmax. Agreement with the O5 argmax below 90% triggers a warning; chance levels are reported.
 
 Outputs in `runs/<config>/<model_slug>/measure/`:
 
-- `scores.parquet`: `item_id, model_id, p_A..p_D, s_target, gen_letter`, plus `argmax_letter, letter_mass,
-  name_mass_target, name_mass_other, target_name_collision, s_target_credit, gen_text`. Chat prompts end with a
-  prefilled assistant turn "Answer:", so the scored token is the answer letter rather than a brand name.
+- `scores.parquet`: `item_id, model_id, p_A..p_D, s_target, gen_letter`, plus `argmax_letter, argmax_free,
+  argmax_forced, s_target_free, s_target_forced, s_target_lo, s_target_hi, c_free, c_forced, name_share_*,
+  leak_*, pruned_*, gen_text, gen_mode`.
 - `pair_scores.parquet`, `name_effects.parquet`.
-- `entity_evidence.parquet`: entity × evidence-level name effects, plus the residual of the robust regression
-  through the origin of evidence 4 on evidence 0.
+- `entity_evidence.parquet`: entity × evidence-level name effects (SEs over card sets), plus the residual of the
+  robust regression through the origin of evidence 4 on evidence 0.
+- `estimators_by_entity.parquet` (O5 / O3 / O4), `coverage_by_level.parquet`, `answer_channel_by_entity.parquet`,
+  `answer_format.json` (format shifts, estimator agreement, evidence-0 bounds).
 - `handicap_effects.parquet`, `ladder_regression.json` (spec variant plus handicap-0 and format-baseline variants
   with bootstrap CIs), `consistency.json`.
-- `evidence_sensitivity.json`: does the model respond to the rating, price and review gaps at all?
-- `name_mass_by_entity.parquet` and `entity_evidence_credit.parquet`: name-answer diagnostics.
+- `evidence_sensitivity.json`: within-card-set handicap response per star, the manipulation ratio (placebo per-star
+  drop / median |ne_e0|; warning below the provisional 0.25), and the across-pair OLS on card gaps.
 - `summary.md`, `_DONE`.
 
 `--split test --unseal` measures the sealed test split, writing to `measure_test/`.
@@ -128,6 +135,17 @@ Registered base checkpoints such as `meta-llama/Llama-3.1-8B` are measured autom
 continuation. For an unregistered or local path the prompt mode is only guessed, with a warning; set it with
 `--prompt-mode base` or `--prompt-mode chat`. Qwen3's thinking mode is switched off through its template (registry
 `chat_template_kwargs`).
+
+### `format-probe` (run before `measure` on every new checkpoint)
+
+```bash
+python -m rtp.cli format-probe --config configs/pilot.yaml --model allenai/Llama-3.1-Tulu-3-8B-SFT
+```
+
+Scores a balanced 40-item dev sample (`--n-items`) like `measure` and decodes every sampled item greedily. It
+prints the tails of the rendered prompts, coverage at both positions, name share, the free and forced argmax and
+the parsed free answer per item, and writes `runs/<config>/format_probe/<model>/summary.md`. A few minutes on a
+GPU; not a stage (nothing is cached).
 
 ### `open-ended`
 
@@ -190,14 +208,29 @@ prompt, read at the option line), each layer and each attribute, and evaluates t
 It exports `K_{frame}_L{layer}.npy` for every layer, at rank ≤ `k_rank`. K is an orthonormal basis of the probes'
 Haufe encoding patterns, then the PCs of entity-averaged level means, then the probe weights.
 
-`summary.md` starts with **Readiness for M4**. Each check is compared with a shuffled-label null built the same way,
-the embedding layer is excluded, and p-values are corrected over layers. It warns when:
+`summary.md` starts with **Readiness for M4**. Each check is compared with `probe.n_null_k` (pilot 99) shuffled-label
+nulls built the same way, with per-layer permutation p-values and a max-over-layers family-wise p; the embedding
+layer is excluded. It warns when:
 
 - probes do not beat the control task;
 - binding is not shown in both description orders;
 - K captures no more of the real-minus-placebo activation difference than a shuffled-label K;
 - the price-tier read-out does not rank real brands by tier within categories;
 - the popularity read-out separates real brands from placebos no better than a shuffled probe (familiarity).
+
+### `localize` (M3 readiness, dev split only)
+
+```bash
+python -m rtp.cli localize --config configs/pilot.yaml --model allenai/Llama-3.1-Tulu-3-8B-SFT
+```
+
+Where is the name effect carried? Full activation transplants on evidence-0 pairs (`localize.pairs_per_entity`
+per entity, `localize.rotations`), knock-in (placebo run ← real residual, spec §7.6) and knock-out, at the target
+name's last token, every post-name token, the final token, and a band of `localize.band` layers, at every
+`localize.layer_stride`-th layer. `recovery.parquet` and `summary.md` give the pooled recovery with an entity
+bootstrap CI, the between-entity R², recovery per token-count class, the spec layer (highest knock-in recovery at
+the name's last token; warning below 0.8) and the pre-registered alternative layer. Cost: about
+2 × (4 × layers) + 2 scored runs per unit; the pilot settings give 1,440 units.
 
 ### `status`, `doctor`, `feedback` (operations)
 
@@ -249,9 +282,9 @@ error (the message says which).
 2. Clone and install. `PIN_COMMIT` optionally pins the code; the notebook checks that torch is unchanged.
 3. `doctor` preflight, plus batch sizes chosen for the GPU (H200 or 96 GB).
 4. Smoke and the tests.
-5. `build-data`.
-6. `measure`, `open-ended`, `extract`, `probe` and `status` for each model. Re-run this cell to resume.
-7. `report`, plus the probe readiness summaries.
+5. `build-data`, then `format-probe` for each model (check the answer format before the long runs).
+6. `measure`, `open-ended`, `extract`, `probe`, `localize` and `status` for each model. Re-run this cell to resume.
+7. `report`, plus the probe readiness and localisation summaries.
 8. **Feedback bundle** for the coding agent.
 
 Stages run through `rtp.notebook`, which streams live output, marks warnings and errors, keeps going when one model
@@ -265,14 +298,18 @@ pytest -q
 
 Unit tests use synthetic data and run on CPU. They cover:
 
-- letter merging and normalisation, and log-odds clipping;
+- the answer-path estimator (letter/name event masses, article rule, identity leak, pruning, O5/O3/O4 and bounds),
+  deferred-answer parsing, the consistency modes, matched card sets, the handicap response and manipulation ratio;
+- log-odds clipping;
 - rotation averaging cancelling a synthetic position bias;
 - pairing strictly within `pair_id`;
 - robust regression with an outlier;
 - brand matching and pick aggregation;
 - determinism (file hashes), schema and design invariants, the sealed split, and placebo conflicts;
 - M3: ridge probes against sklearn, grouped CV, the control task, recovery of an embedded attribute subspace by K
-  (spec §10), the capture ratio, and token location;
+  (spec §10), the capture ratio, the max-over-layers permutation p, token location, and the localisation
+  estimators (pooled recovery, between-entity R², layer rules); integration tests check the identity transplant
+  (spec §10) and the answer-path estimator against brute force on the smoke model;
 - the operations tooling: status, feedback bundles (including secret redaction), events, overrides, and the
   notebook helpers.
 

@@ -54,6 +54,15 @@ categories:
       - {name: Adidas, tier: mid, aliases: [adidas]}
       - {name: Mizuno, tier: mid, aliases: []}
       - {name: Puma, tier: budget, aliases: [PUMA]}
+      - {name: Altra, tier: mid, aliases: [Altra Running]}
+      - {name: Under Armour, tier: mid, aliases: []}
+      - {name: Salomon, tier: premium, aliases: []}
+      - {name: Reebok, tier: budget, aliases: []}
+      - {name: Skechers, tier: budget, aliases: []}
+      - {name: Merrell, tier: mid, aliases: []}
+      - {name: Topo Athletic, tier: mid, aliases: [Topo]}
+      - {name: Karhu, tier: mid, aliases: []}
+      - {name: Diadora, tier: mid, aliases: []}
     card:
       price: [80, 180]
       rating: [4.0, 4.8]
@@ -87,6 +96,15 @@ categories:
       - {name: Microsoft, tier: premium, aliases: [Microsoft Surface, Surface]}
       - {name: Razer, tier: premium, aliases: []}
       - {name: MSI, tier: mid, aliases: []}
+      - {name: Samsung, tier: mid, aliases: [Galaxy Book]}
+      - {name: LG, tier: mid, aliases: [LG Gram]}
+      - {name: Huawei, tier: mid, aliases: [MateBook]}
+      - {name: Framework, tier: premium, aliases: [Framework Laptop], match_case: true}
+      - {name: Alienware, tier: premium, aliases: []}
+      - {name: Gigabyte, tier: mid, aliases: [GIGABYTE]}
+      - {name: Panasonic, tier: premium, aliases: [Toughbook]}
+      - {name: Fujitsu, tier: mid, aliases: []}
+      - {name: Dynabook, tier: budget, aliases: [Toshiba]}
     card:
       price: [500, 2000]
       rating: [4.0, 4.8]
@@ -119,6 +137,16 @@ categories:
       - {name: Xiaomi, tier: budget, aliases: []}
       - {name: Sony, tier: premium, aliases: [Sony Xperia, Xperia]}
       - {name: Nokia, tier: budget, aliases: []}
+      - {name: Huawei, tier: mid, aliases: []}
+      - {name: Oppo, tier: mid, aliases: [OPPO]}
+      - {name: Vivo, tier: mid, aliases: [vivo]}
+      - {name: Realme, tier: budget, aliases: [realme]}
+      - {name: Honor, tier: mid, aliases: [HONOR], match_case: true}
+      - {name: Asus, tier: mid, aliases: [ASUS, Zenfone, ROG Phone]}
+      - {name: Fairphone, tier: premium, aliases: []}
+      - {name: TCL, tier: budget, aliases: []}
+      - {name: ZTE, tier: budget, aliases: []}
+      - {name: Tecno, tier: budget, aliases: [TECNO]}
     card:
       price: [300, 1200]
       rating: [4.0, 4.8]
@@ -151,6 +179,16 @@ categories:
       - {name: OM System, tier: mid, aliases: [Olympus]}
       - {name: Leica, tier: premium, aliases: []}
       - {name: Pentax, tier: budget, aliases: []}
+      - {name: GoPro, tier: mid, aliases: []}
+      - {name: DJI, tier: mid, aliases: []}
+      - {name: Ricoh, tier: mid, aliases: [Ricoh GR]}
+      - {name: Hasselblad, tier: premium, aliases: []}
+      - {name: Sigma, tier: mid, aliases: [], match_case: true}
+      - {name: Kodak, tier: budget, aliases: []}
+      - {name: Polaroid, tier: budget, aliases: []}
+      - {name: Blackmagic Design, tier: premium, aliases: [Blackmagic]}
+      - {name: Insta360, tier: mid, aliases: []}
+      - {name: Phase One, tier: premium, aliases: []}
     card:
       price: [500, 2500]
       rating: [4.0, 4.8]
@@ -185,6 +223,14 @@ categories:
       - {name: "Peet's Coffee", tier: mid, aliases: ["Peet's", Peets]}
       - {name: Death Wish Coffee, tier: premium, aliases: [Death Wish]}
       - {name: Blue Bottle, tier: premium, aliases: [Blue Bottle Coffee]}
+      - {name: "Nescafé", tier: budget, aliases: [Nescafe]}
+      - {name: Intelligentsia, tier: premium, aliases: [Intelligentsia Coffee]}
+      - {name: Counter Culture, tier: premium, aliases: [Counter Culture Coffee]}
+      - {name: "Eight O'Clock", tier: budget, aliases: ["Eight O'Clock Coffee", Eight OClock]}
+      - {name: Green Mountain, tier: mid, aliases: [Green Mountain Coffee]}
+      - {name: Caribou Coffee, tier: mid, aliases: [Caribou]}
+      - {name: Kicking Horse, tier: mid, aliases: [Kicking Horse Coffee]}
+      - {name: Tim Hortons, tier: budget, aliases: ["Tim Horton's"]}
     card:
       price: [8, 25]
       rating: [4.0, 4.8]
@@ -218,6 +264,15 @@ categories:
       - {name: Tissot, tier: mid, aliases: []}
       - {name: Timex, tier: budget, aliases: []}
       - {name: Hamilton, tier: mid, aliases: []}
+      - {name: Breitling, tier: premium, aliases: []}
+      - {name: Longines, tier: premium, aliases: []}
+      - {name: Patek Philippe, tier: premium, aliases: [Patek]}
+      - {name: Audemars Piguet, tier: premium, aliases: []}
+      - {name: Cartier, tier: premium, aliases: []}
+      - {name: Orient, tier: budget, aliases: [], match_case: true}
+      - {name: Fossil, tier: budget, aliases: [], match_case: true}
+      - {name: Swatch, tier: budget, aliases: []}
+      - {name: Bulova, tier: mid, aliases: []}
     card:
       price: [100, 800]
       rating: [4.0, 4.8]
@@ -251,6 +306,15 @@ categories:
       - {name: Coors, tier: budget, aliases: [Coors Light]}
       - {name: Samuel Adams, tier: mid, aliases: [Sam Adams]}
       - {name: Modelo, tier: mid, aliases: []}
+      - {name: Miller, tier: budget, aliases: [Miller Lite, Miller High Life]}
+      - {name: Michelob, tier: mid, aliases: [Michelob Ultra]}
+      - {name: Blue Moon, tier: mid, aliases: []}
+      - {name: Pabst, tier: budget, aliases: [Pabst Blue Ribbon, PBR]}
+      - {name: Dos Equis, tier: mid, aliases: []}
+      - {name: Asahi, tier: mid, aliases: [Asahi Super Dry]}
+      - {name: Sapporo, tier: mid, aliases: []}
+      - {name: Carlsberg, tier: mid, aliases: []}
+      - {name: Lagunitas, tier: mid, aliases: []}
     card:
       price: [9, 20]
       rating: [4.0, 4.8]
@@ -284,6 +348,15 @@ categories:
       - {name: Ritz, tier: budget, aliases: []}
       - {name: Goldfish, tier: budget, aliases: []}
       - {name: RXBAR, tier: premium, aliases: [RX Bar, RXBar]}
+      - {name: Oreo, tier: mid, aliases: [Oreos]}
+      - {name: Fritos, tier: budget, aliases: []}
+      - {name: Tostitos, tier: mid, aliases: []}
+      - {name: Ruffles, tier: budget, aliases: []}
+      - {name: Cheez-It, tier: budget, aliases: [Cheez-Its, Cheez It]}
+      - {name: Nature Valley, tier: mid, aliases: []}
+      - {name: SunChips, tier: mid, aliases: [Sun Chips]}
+      - {name: Kettle Brand, tier: premium, aliases: [Kettle Chips]}
+      - {name: Quest, tier: premium, aliases: [Quest Nutrition, Quest Bar], match_case: true}
     card:
       price: [2, 7]
       rating: [4.0, 4.8]
@@ -317,6 +390,15 @@ categories:
       - {name: Reebok, tier: budget, aliases: []}
       - {name: Asics, tier: mid, aliases: [ASICS]}
       - {name: Veja, tier: premium, aliases: []}
+      - {name: Jordan, tier: premium, aliases: [Air Jordan, Jordans], match_case: true}
+      - {name: Skechers, tier: budget, aliases: []}
+      - {name: Fila, tier: budget, aliases: [FILA]}
+      - {name: Saucony, tier: mid, aliases: []}
+      - {name: Allbirds, tier: mid, aliases: []}
+      - {name: Common Projects, tier: premium, aliases: []}
+      - {name: K-Swiss, tier: budget, aliases: [K Swiss]}
+      - {name: Le Coq Sportif, tier: mid, aliases: []}
+      - {name: Onitsuka Tiger, tier: mid, aliases: []}
     card:
       price: [60, 160]
       rating: [4.0, 4.8]
@@ -351,6 +433,14 @@ categories:
       - {name: Polestar, tier: premium, aliases: []}
       - {name: Chevrolet, tier: budget, aliases: [Chevy]}
       - {name: Volkswagen, tier: mid, aliases: [VW]}
+      - {name: Nissan, tier: budget, aliases: [Nissan Leaf]}
+      - {name: Audi, tier: premium, aliases: [Audi e-tron]}
+      - {name: Mercedes-Benz, tier: premium, aliases: [Mercedes, Mercedes Benz]}
+      - {name: BYD, tier: budget, aliases: []}
+      - {name: Volvo, tier: premium, aliases: []}
+      - {name: Porsche, tier: premium, aliases: []}
+      - {name: Cadillac, tier: premium, aliases: []}
+      - {name: Toyota, tier: mid, aliases: []}
     card:
       price: [30000, 80000]
       rating: [4.0, 4.8]
@@ -370,6 +460,343 @@ categories:
         - "Offered in five exterior colors."
         - "Comes with a standard home charging cable."
         - "Sold with an eight-year battery warranty."
+
+  # ---- added 2026-11-12 (catalogue expansion for a larger calibration population; DRAFT, needs review)
+  television:
+    code: tv
+    needs_review: true
+    brands:
+      - {name: Samsung, tier: premium, aliases: []}
+      - {name: LG, tier: premium, aliases: []}
+      - {name: Sony, tier: premium, aliases: [Sony Bravia, Bravia]}
+      - {name: TCL, tier: budget, aliases: []}
+      - {name: Hisense, tier: budget, aliases: []}
+      - {name: Vizio, tier: budget, aliases: [VIZIO]}
+      - {name: Panasonic, tier: mid, aliases: []}
+      - {name: Philips, tier: mid, aliases: []}
+      - {name: Sharp, tier: mid, aliases: [], match_case: true}
+      - {name: Toshiba, tier: budget, aliases: []}
+      - {name: Insignia, tier: budget, aliases: []}
+      - {name: Roku, tier: budget, aliases: []}
+      - {name: Amazon, tier: budget, aliases: [Fire TV, Amazon Fire TV]}
+      - {name: Skyworth, tier: budget, aliases: []}
+      - {name: Westinghouse, tier: budget, aliases: []}
+      - {name: JVC, tier: budget, aliases: []}
+      - {name: Element, tier: budget, aliases: [Element Electronics], match_case: true}
+      - {name: Bang & Olufsen, tier: premium, aliases: [Bang and Olufsen, B&O]}
+    card:
+      price: [250, 2000]
+      rating: [4.0, 4.8]
+      n_reviews: [100, 15000]
+      features:
+        - "55-inch screen"
+        - "4K resolution"
+        - "HDR10 support"
+        - "120 Hz refresh rate"
+        - "built-in streaming apps"
+        - "three HDMI ports"
+        - "voice remote"
+        - "Dolby Atmos audio"
+      descriptions:
+        - "A television sold online and in stores."
+        - "Available in several screen sizes."
+        - "Ships with a stand and a remote."
+        - "Comes with a one-year limited warranty."
+        - "Offered with an optional wall mount."
+
+  vacuum cleaner:
+    code: vc
+    needs_review: true
+    brands:
+      - {name: Dyson, tier: premium, aliases: []}
+      - {name: Shark, tier: mid, aliases: [SharkNinja], match_case: true}
+      - {name: Bissell, tier: budget, aliases: [BISSELL]}
+      - {name: Hoover, tier: budget, aliases: []}
+      - {name: Miele, tier: premium, aliases: []}
+      - {name: iRobot, tier: premium, aliases: [Roomba]}
+      - {name: Eureka, tier: budget, aliases: [], match_case: true}
+      - {name: Dirt Devil, tier: budget, aliases: []}
+      - {name: Kenmore, tier: mid, aliases: []}
+      - {name: Black+Decker, tier: budget, aliases: [Black & Decker, Black and Decker, BLACK+DECKER]}
+      - {name: Electrolux, tier: mid, aliases: []}
+      - {name: Samsung, tier: mid, aliases: []}
+      - {name: LG, tier: mid, aliases: []}
+      - {name: Tineco, tier: mid, aliases: []}
+      - {name: Ecovacs, tier: mid, aliases: [Deebot]}
+      - {name: Roborock, tier: mid, aliases: []}
+      - {name: Oreck, tier: mid, aliases: []}
+      - {name: Kirby, tier: premium, aliases: []}
+    card:
+      price: [100, 700]
+      rating: [4.0, 4.8]
+      n_reviews: [100, 20000]
+      features:
+        - "cordless design"
+        - "HEPA filter"
+        - "60-minute runtime"
+        - "bagless dustbin"
+        - "LED headlight"
+        - "wall-mounted dock"
+        - "pet hair attachment"
+        - "weighs 6 lb"
+      descriptions:
+        - "A vacuum cleaner sold online and in stores."
+        - "Available in two colors."
+        - "Ships with a crevice tool."
+        - "Comes with a two-year limited warranty."
+        - "Offered with an extra filter."
+
+  blender:
+    code: bd
+    needs_review: true
+    brands:
+      - {name: Vitamix, tier: premium, aliases: []}
+      - {name: Ninja, tier: mid, aliases: [], match_case: true}
+      - {name: Blendtec, tier: premium, aliases: []}
+      - {name: KitchenAid, tier: mid, aliases: [Kitchen Aid]}
+      - {name: Oster, tier: budget, aliases: []}
+      - {name: Hamilton Beach, tier: budget, aliases: []}
+      - {name: Cuisinart, tier: mid, aliases: []}
+      - {name: Breville, tier: premium, aliases: []}
+      - {name: NutriBullet, tier: budget, aliases: [Nutribullet]}
+      - {name: Black+Decker, tier: budget, aliases: [Black & Decker, Black and Decker, BLACK+DECKER]}
+      - {name: Magic Bullet, tier: budget, aliases: []}
+      - {name: Waring, tier: mid, aliases: []}
+      - {name: Braun, tier: mid, aliases: []}
+      - {name: Kenwood, tier: mid, aliases: []}
+      - {name: Philips, tier: mid, aliases: []}
+      - {name: Smeg, tier: premium, aliases: [SMEG]}
+      - {name: Wolf Gourmet, tier: premium, aliases: []}
+      - {name: Bella, tier: budget, aliases: [], match_case: true}
+    card:
+      price: [40, 500]
+      rating: [4.0, 4.8]
+      n_reviews: [100, 20000]
+      features:
+        - "1,200-watt motor"
+        - "64 oz pitcher"
+        - "variable speed control"
+        - "pulse function"
+        - "dishwasher-safe jar"
+        - "stainless steel blades"
+        - "BPA-free container"
+        - "tamper included"
+      descriptions:
+        - "A blender sold online and in stores."
+        - "Available in several colors."
+        - "Ships with a recipe book."
+        - "Comes with a limited warranty."
+        - "Offered with a single-serve cup."
+
+  mattress:
+    code: mt
+    needs_review: true
+    brands:
+      - {name: Casper, tier: mid, aliases: []}
+      - {name: Purple, tier: mid, aliases: [], match_case: true}
+      - {name: Tempur-Pedic, tier: premium, aliases: [Tempur Pedic, TEMPUR-PEDIC, Tempur]}
+      - {name: Sealy, tier: mid, aliases: []}
+      - {name: Serta, tier: mid, aliases: []}
+      - {name: Simmons, tier: mid, aliases: [Beautyrest, Simmons Beautyrest]}
+      - {name: Saatva, tier: premium, aliases: []}
+      - {name: Tuft & Needle, tier: budget, aliases: [Tuft and Needle]}
+      - {name: Nectar, tier: budget, aliases: [], match_case: true}
+      - {name: Leesa, tier: mid, aliases: []}
+      - {name: Helix, tier: mid, aliases: [Helix Sleep], match_case: true}
+      - {name: DreamCloud, tier: mid, aliases: []}
+      - {name: Avocado, tier: premium, aliases: [Avocado Green], match_case: true}
+      - {name: Sleep Number, tier: premium, aliases: []}
+      - {name: Stearns & Foster, tier: premium, aliases: [Stearns and Foster]}
+      - {name: Brooklyn Bedding, tier: mid, aliases: []}
+      - {name: Zinus, tier: budget, aliases: []}
+      - {name: Allswell, tier: budget, aliases: []}
+    card:
+      price: [300, 2000]
+      rating: [4.0, 4.8]
+      n_reviews: [100, 15000]
+      features:
+        - "queen size"
+        - "memory foam layers"
+        - "pocketed coils"
+        - "medium-firm feel"
+        - "cooling cover"
+        - "12-inch profile"
+        - "100-night trial"
+        - "CertiPUR-US certified foams"
+      descriptions:
+        - "A mattress sold online and in stores."
+        - "Available in six sizes."
+        - "Ships compressed in a box."
+        - "Comes with a ten-year limited warranty."
+        - "Offered with optional in-home delivery."
+
+  backpack:
+    code: bp
+    needs_review: true
+    brands:
+      - {name: JanSport, tier: budget, aliases: [Jansport]}
+      - {name: The North Face, tier: mid, aliases: [North Face]}
+      - {name: Herschel, tier: mid, aliases: [Herschel Supply]}
+      - {name: Osprey, tier: mid, aliases: [], match_case: true}
+      - {name: Patagonia, tier: premium, aliases: []}
+      - {name: "Fjällräven", tier: mid, aliases: [Fjallraven, Kanken]}
+      - {name: Eastpak, tier: budget, aliases: []}
+      - {name: Samsonite, tier: mid, aliases: []}
+      - {name: Under Armour, tier: mid, aliases: []}
+      - {name: Nike, tier: mid, aliases: []}
+      - {name: Adidas, tier: budget, aliases: [adidas]}
+      - {name: Deuter, tier: mid, aliases: []}
+      - {name: Gregory, tier: premium, aliases: [], match_case: true}
+      - {name: Tumi, tier: premium, aliases: [TUMI]}
+      - {name: Kipling, tier: mid, aliases: []}
+      - {name: Targus, tier: budget, aliases: []}
+      - {name: SwissGear, tier: budget, aliases: [Swiss Gear]}
+      - {name: Peak Design, tier: premium, aliases: []}
+    card:
+      price: [40, 300]
+      rating: [4.0, 4.8]
+      n_reviews: [100, 20000]
+      features:
+        - "28-liter capacity"
+        - "padded laptop sleeve"
+        - "water-resistant fabric"
+        - "padded shoulder straps"
+        - "side water-bottle pockets"
+        - "luggage pass-through"
+        - "YKK zippers"
+        - "weighs 1.8 lb"
+      descriptions:
+        - "A backpack sold online and in stores."
+        - "Available in several colors."
+        - "Ships in a reusable dust bag."
+        - "Comes with a limited warranty."
+        - "Offered in two sizes."
+
+  soda:
+    code: sd
+    needs_review: true
+    brands:
+      - {name: Coca-Cola, tier: mid, aliases: [Coke, Coca Cola]}
+      - {name: Pepsi, tier: mid, aliases: []}
+      - {name: Sprite, tier: mid, aliases: [], match_case: true}
+      - {name: Dr Pepper, tier: mid, aliases: [Dr. Pepper]}
+      - {name: Mountain Dew, tier: mid, aliases: [Mtn Dew]}
+      - {name: Fanta, tier: mid, aliases: []}
+      - {name: 7 Up, tier: budget, aliases: [7UP, 7-Up, Seven Up]}
+      - {name: Canada Dry, tier: budget, aliases: []}
+      - {name: "A&W", tier: budget, aliases: [A&W Root Beer]}
+      - {name: Schweppes, tier: mid, aliases: []}
+      - {name: Sunkist, tier: budget, aliases: []}
+      - {name: Crush, tier: budget, aliases: [Orange Crush], match_case: true}
+      - {name: "Barq's", tier: budget, aliases: [Barqs]}
+      - {name: Big Red, tier: budget, aliases: []}
+      - {name: RC Cola, tier: budget, aliases: [Royal Crown, Royal Crown Cola]}
+      - {name: Jarritos, tier: mid, aliases: []}
+      - {name: Olipop, tier: premium, aliases: [OLIPOP]}
+      - {name: Poppi, tier: premium, aliases: [poppi]}
+    card:
+      price: [3, 9]
+      rating: [4.0, 4.8]
+      n_reviews: [100, 30000]
+      features:
+        - "six 12 oz cans"
+        - "caffeine free"
+        - "made with cane sugar"
+        - "no artificial preservatives"
+        - "140 calories per can"
+        - "recyclable aluminum cans"
+        - "gluten free"
+        - "kosher certified"
+      descriptions:
+        - "A soda sold online and in grocery stores."
+        - "Available in cans and bottles."
+        - "Sold in six-packs and twelve-packs."
+        - "Offered in several flavors."
+        - "Ships in a cardboard carrier."
+
+  printer:
+    code: pt
+    needs_review: true
+    brands:
+      - {name: HP, tier: mid, aliases: [Hewlett-Packard]}
+      - {name: Canon, tier: mid, aliases: []}
+      - {name: Epson, tier: mid, aliases: []}
+      - {name: Brother, tier: mid, aliases: [], match_case: true}
+      - {name: Xerox, tier: premium, aliases: []}
+      - {name: Lexmark, tier: mid, aliases: []}
+      - {name: Kyocera, tier: premium, aliases: []}
+      - {name: Ricoh, tier: premium, aliases: []}
+      - {name: Samsung, tier: budget, aliases: []}
+      - {name: Dell, tier: mid, aliases: []}
+      - {name: Sharp, tier: mid, aliases: [], match_case: true}
+      - {name: Konica Minolta, tier: premium, aliases: []}
+      - {name: OKI, tier: mid, aliases: [], match_case: true}
+      - {name: Pantum, tier: budget, aliases: []}
+      - {name: Kodak, tier: budget, aliases: []}
+      - {name: Toshiba, tier: mid, aliases: []}
+      - {name: Panasonic, tier: mid, aliases: []}
+      - {name: Fujifilm, tier: premium, aliases: []}
+    card:
+      price: [80, 500]
+      rating: [4.0, 4.8]
+      n_reviews: [100, 15000]
+      features:
+        - "wireless printing"
+        - "automatic two-sided printing"
+        - "250-sheet paper tray"
+        - "prints up to 30 pages per minute"
+        - "built-in scanner"
+        - "mobile app support"
+        - "touchscreen control panel"
+        - "Ethernet port"
+      descriptions:
+        - "A printer sold online and in stores."
+        - "Available in white and black."
+        - "Ships with starter cartridges."
+        - "Comes with a one-year limited warranty."
+        - "Offered with an optional extra paper tray."
+
+  shampoo:
+    code: sh
+    needs_review: true
+    brands:
+      - {name: Pantene, tier: mid, aliases: []}
+      - {name: Head & Shoulders, tier: budget, aliases: [Head and Shoulders]}
+      - {name: Dove, tier: mid, aliases: [], match_case: true}
+      - {name: "TRESemmé", tier: budget, aliases: [Tresemme, TRESemme]}
+      - {name: Garnier, tier: budget, aliases: [Garnier Fructis, Fructis]}
+      - {name: "L'Oréal", tier: mid, aliases: ["L'Oreal", Loreal, "L'Oréal Paris"]}
+      - {name: Herbal Essences, tier: budget, aliases: []}
+      - {name: Suave, tier: budget, aliases: [], match_case: true}
+      - {name: Aveeno, tier: mid, aliases: []}
+      - {name: OGX, tier: mid, aliases: []}
+      - {name: Redken, tier: premium, aliases: []}
+      - {name: Paul Mitchell, tier: premium, aliases: []}
+      - {name: "Kérastase", tier: premium, aliases: [Kerastase]}
+      - {name: Neutrogena, tier: mid, aliases: []}
+      - {name: Nexxus, tier: premium, aliases: []}
+      - {name: Aussie, tier: budget, aliases: [], match_case: true}
+      - {name: Pert, tier: budget, aliases: [Pert Plus]}
+      - {name: Olaplex, tier: premium, aliases: [OLAPLEX]}
+    card:
+      price: [5, 40]
+      rating: [4.0, 4.8]
+      n_reviews: [100, 30000]
+      features:
+        - "12 oz bottle"
+        - "sulfate free"
+        - "paraben free"
+        - "for all hair types"
+        - "color safe"
+        - "vegan formula"
+        - "pH balanced"
+        - "recyclable bottle"
+      descriptions:
+        - "A shampoo sold online and in stores."
+        - "Available in several formulas."
+        - "Sold in single bottles and two-packs."
+        - "Offered in travel and full sizes."
+        - "Ships in a sealed bottle."
 
 # Appendix A categories WITHOUT choice items. Used only by open-ended measurement
 # (open_ended.all_natural_negatives: true): brands for answer matching and for the

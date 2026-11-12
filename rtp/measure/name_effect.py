@@ -7,9 +7,10 @@ Per entity: mean name effect per evidence level, with pair counts and standard e
 model: a robust (Huber) regression through the origin of the evidence-4 name effect on the
 evidence-0 name effect (spec), plus two variants that separate evidence from prompt format
 (evidence-4 at handicap 0 only; evidence 1 as the format baseline), each with a bootstrap CI
-over entities. Two checks make the ladder interpretable: does the model respond to the card
-evidence at all (slope of s_target on rating/price/review gaps), and does it answer with the
-brand NAME instead of a letter (name-first-token mass)?
+over entities. Checks that make the ladder interpretable: is the evidence manipulation strong
+enough (within-card-set handicap response, scale-free ratio to the name effects), is the answer
+format stable across evidence levels (coverage and name share vs evidence 0), and do the
+estimators O5 / O3 / O4 and the imputation-free bounds agree?
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ from rtp.data.choice_items import LETTERS
 log = logging.getLogger(__name__)
 
 N_ROTATIONS = 4
-ITEM_META = ["item_id", "pair_id", "category", "pair_entity", "evidence_level", "handicap", "target_is_placebo",
+ITEM_META = ["item_id", "pair_id", "card_set", "category", "pair_entity", "evidence_level", "handicap", "target_is_placebo",
              "rotation", "target_label"]
 
 
@@ -46,7 +47,8 @@ def rotation_average(scores: pd.DataFrame, meta: pd.DataFrame, col: str = "s_tar
                                                                          validate="one_to_one")
     keys = ["pair_id", "target_is_placebo"]
     g = df.groupby(keys, sort=True)
-    out = g.agg(category=("category", "first"), entity=("pair_entity", "first"),
+    extra = {"card_set": ("card_set", "first")} if "card_set" in df else {}
+    out = g.agg(category=("category", "first"), entity=("pair_entity", "first"), **extra,
                 evidence_level=("evidence_level", "first"), handicap=("handicap", "first"),
                 s_target=("s_target", "mean"), n_rotations=("rotation", "nunique"), n_items=("item_id", "size"))
     out = out.reset_index()
@@ -74,16 +76,21 @@ def paired_name_effect(pair_scores: pd.DataFrame) -> pd.DataFrame:
         "evidence_level": r["evidence_level"].values, "handicap": r["handicap"].values,
         "s_real": r["s_target"].values, "s_placebo": p["s_target"].values,
     })
+    if "card_set" in r:
+        out.insert(3, "card_set", r["card_set"].values)
     out["name_effect"] = out["s_real"] - out["s_placebo"]
     return out.sort_values("pair_id").reset_index(drop=True)
 
 
 def entity_evidence_table(ne: pd.DataFrame) -> pd.DataFrame:
     """Rows (category, entity). ``ne_e{k}`` = mean name effect at evidence k (all handicaps), ``se_e{k}`` its
-    standard error (pairs are independent draws), ``n_e{k}`` the pair count; ``ne_e4_h0`` = evidence 4 at
-    handicap 0 only (same card quality as evidence 0-2, so only the evidence differs)."""
+    standard error and ``n_e{k}`` the number of independent units: card sets (matched cards: the handicap
+    cells of one card set are averaged first, since they share their cards), else pairs. ``ne_e4_h0`` =
+    evidence 4 at handicap 0 only (same card quality as evidence 0-2, so only the evidence differs)."""
     keys = ["category", "entity"]
-    g = ne.groupby(keys + ["evidence_level"])["name_effect"]
+    unit = "card_set" if "card_set" in ne else "pair_id"
+    per_unit = ne.groupby(keys + ["evidence_level", unit])["name_effect"].mean().reset_index()
+    g = per_unit.groupby(keys + ["evidence_level"])["name_effect"]
     stats = g.agg(["mean", "std", "size"]).reset_index()
     stats["se"] = stats["std"] / np.sqrt(stats["size"])
     parts = []
@@ -250,43 +257,180 @@ def responds_to_ratings(sens: list[dict[str, Any]]) -> bool | None:
     return all(r["coef"] - 2 * r["se"] > 0 for r in rows)
 
 
-NAME_MASS_GAP_WARN = 0.02  # mean real-minus-placebo name-first-token mass of the target, per entity
+# --------------------------------------------------------------------------- answer-format diagnostics
+FORMAT_SHIFT_WARN = 0.2  # |change vs evidence 0| of the free-position name share or coverage
+MANIPULATION_RATIO_MIN = 0.25  # provisional (PI to confirm): placebo per-star handicap response / median |ne_e0|
+DIAG_COLS = ["c_free", "c_forced", "name_share_free", "name_share_forced", "leak_free", "leak_forced",
+             "pruned_free", "pruned_forced"]
 
 
-def mass_by_level(scores: pd.DataFrame, meta: pd.DataFrame) -> pd.DataFrame:
-    df = scores.merge(meta[["item_id", "evidence_level", "target_is_placebo"]], on="item_id")
-    df["version"] = np.where(df["target_is_placebo"], "placebo", "real")
-    return (df.groupby(["evidence_level", "version"])[["letter_mass", "name_mass_target", "name_mass_other"]]
-            .mean().reset_index())
+def _with_meta(scores: pd.DataFrame, meta: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+    df = scores.merge(meta[["item_id"] + cols], on="item_id")
+    if "target_is_placebo" in df:
+        df["version"] = np.where(df["target_is_placebo"], "placebo", "real")
+    return df
 
 
-def name_mass_by_entity(scores: pd.DataFrame, meta: pd.DataFrame) -> pd.DataFrame:
-    """Per entity: target name-first-token mass in the real vs placebo version, and letter collisions."""
-    df = scores.merge(meta[["item_id", "category", "pair_entity", "target_is_placebo"]], on="item_id")
-    g = df.groupby(["category", "pair_entity", "target_is_placebo"])
-    agg = g.agg(name_mass=("name_mass_target", "mean"), collision=("target_name_collision", "any")).reset_index()
-    real = agg[~agg["target_is_placebo"]].set_index(["category", "pair_entity"])
-    plac = agg[agg["target_is_placebo"]].set_index(["category", "pair_entity"])
-    out = pd.DataFrame({"name_mass_real": real["name_mass"], "name_mass_placebo": plac["name_mass"],
-                        "real_name_collides_with_letter": real["collision"],
-                        "placebo_collides_with_letter": plac["collision"]})
-    out["gap"] = out["name_mass_real"] - out["name_mass_placebo"]
-    return out.reset_index().rename(columns={"pair_entity": "entity"}).sort_values("gap", ascending=False)
+def coverage_by_level(scores: pd.DataFrame, meta: pd.DataFrame) -> pd.DataFrame:
+    """Mean coverage, name share, identity leak and pruned mass per (evidence level, version)."""
+    df = _with_meta(scores, meta, ["evidence_level", "target_is_placebo"])
+    cols = [c for c in DIAG_COLS if c in df]
+    return df.groupby(["evidence_level", "version"])[cols].mean().reset_index()
+
+
+def format_stability(cov: pd.DataFrame, max_shift: float = FORMAT_SHIFT_WARN) -> list[dict[str, Any]]:
+    """Levels whose free-position answer FORMAT differs from evidence 0 (name share or coverage shifted by
+    more than ``max_shift``): there the ladder compares readouts of different answer formats."""
+    out = []
+    for version, sub in cov.groupby("version"):
+        base = sub[sub["evidence_level"] == 0]
+        if base.empty:
+            continue
+        for _, r in sub[sub["evidence_level"] != 0].iterrows():
+            for col in ("name_share_free", "c_free"):
+                d = float(r[col] - base[col].iloc[0])
+                if np.isfinite(d) and abs(d) > max_shift:
+                    out.append({"version": version, "evidence_level": int(r["evidence_level"]), "column": col,
+                                "e0": float(base[col].iloc[0]), "value": float(r[col]), "shift": d})
+    return out
+
+
+def channel_by_entity(scores: pd.DataFrame, meta: pd.DataFrame) -> pd.DataFrame:
+    """Per entity: share of the target's free answers given by NAME, and identity leak, per version."""
+    df = _with_meta(scores, meta, ["category", "pair_entity", "target_is_placebo"])
+    g = df.groupby(["category", "pair_entity", "version"])
+    agg = g.agg(name=("target_name_free", "sum"), mass=("target_mass_free", "sum"),
+                leak=("leak_free", "mean")).reset_index()
+    agg["name_share"] = agg["name"] / agg["mass"].where(agg["mass"] > 0)
+    w = agg.pivot_table(index=["category", "pair_entity"], columns="version", values=["name_share", "leak"])
+    w.columns = [f"{a}_{b}" for a, b in w.columns]
+    w = w.reset_index().rename(columns={"pair_entity": "entity"})
+    if {"name_share_real", "name_share_placebo"} <= set(w.columns):
+        w["name_share_gap"] = w["name_share_real"] - w["name_share_placebo"]
+    return w
+
+
+def estimator_table(scores: pd.DataFrame, meta: pd.DataFrame) -> pd.DataFrame:
+    """Per entity ne_e0 / ne_e4 under O5 (primary), O3 (free only) and O4 (forced only)."""
+    parts = []
+    for tag, col in (("o5", "s_target"), ("o3", "s_target_free"), ("o4", "s_target_forced")):
+        if col not in scores:
+            continue
+        t = entity_evidence_table(paired_name_effect(rotation_average(scores, meta, col=col)))
+        keep = [c for c in ("ne_e0", "ne_e4") if c in t]
+        parts.append(t.set_index(["category", "entity"])[keep].add_suffix(f"_{tag}"))
+    return pd.concat(parts, axis=1).reset_index() if parts else pd.DataFrame()
+
+
+def estimator_agreement(est: pd.DataFrame) -> list[dict[str, Any]]:
+    """Spearman correlation of entity name effects between O5 and O3 / O4 (evidence 0 and 4)."""
+    out = []
+    for lvl in ("ne_e0", "ne_e4"):
+        for other in ("o3", "o4"):
+            a, b = f"{lvl}_o5", f"{lvl}_{other}"
+            if a in est and b in est:
+                ok = est[[a, b]].dropna()
+                rho = float(ok[a].rank().corr(ok[b].rank())) if len(ok) >= 3 else float("nan")
+                out.append({"level": lvl, "vs": other, "spearman": rho, "n": int(len(ok))})
+    return out
+
+
+def name_effect_bounds(scores: pd.DataFrame, meta: pd.DataFrame, level: int = 0) -> dict[str, Any]:
+    """Imputation-free bounds of each entity's name effect at ``level``: P_target lies in
+    [q_free_t, q_free_t + 1 - c_free] per item (the deferred mass could go anywhere), so the rotation-averaged
+    pair effect lies in [lo_real - hi_placebo, hi_real - lo_placebo]; averaged per entity."""
+    if "s_target_lo" not in scores:
+        return {"n_entities": 0}
+    lo = rotation_average(scores, meta, col="s_target_lo").rename(columns={"s_target": "lo"})
+    hi = rotation_average(scores, meta, col="s_target_hi").rename(columns={"s_target": "hi"})
+    df = lo.merge(hi[["pair_id", "target_is_placebo", "hi"]], on=["pair_id", "target_is_placebo"])
+    df = df[df["evidence_level"] == level]
+    r = df[~df["target_is_placebo"]].set_index("pair_id")
+    p = df[df["target_is_placebo"]].set_index("pair_id")
+    common = r.index.intersection(p.index)
+    pair = pd.DataFrame({"entity": r.loc[common, "entity"], "category": r.loc[common, "category"],
+                         "lo": r.loc[common, "lo"] - p.loc[common, "hi"], "hi": r.loc[common, "hi"] - p.loc[common, "lo"]})
+    ent = pair.groupby(["category", "entity"])[["lo", "hi"]].mean()
+    if ent.empty:
+        return {"n_entities": 0}
+    excl = (ent["lo"] > 0) | (ent["hi"] < 0)
+    return {"level": level, "n_entities": int(len(ent)), "share_excluding_zero": float(excl.mean()),
+            "median_width": float((ent["hi"] - ent["lo"]).median())}
+
+
+def handicap_response(pairs: pd.DataFrame, deltas: list[float], seed: int = 0) -> list[dict[str, Any]]:
+    """Within-card-set response of s_target to the handicap (evidence >= 3), per name version: least squares
+    through the origin of s(h) - s(h=0) on the stars removed, delta[h]; reported as the drop in s_target
+    per star (positive = the model penalises a worse rating). Matched cards make this a clean manipulation
+    effect: the two cells differ only in the target's rating. SE: cluster bootstrap over card sets."""
+    if "card_set" not in pairs:
+        return []
+    out = []
+    df = pairs[pairs["evidence_level"] >= 3]
+    for version, sub in df.groupby("target_is_placebo"):
+        base = sub[sub["handicap"] == 0].set_index(["card_set", "evidence_level"])["s_target"]
+        rest = sub[sub["handicap"] > 0].copy()
+        rest["d"] = rest["s_target"].values - base.reindex(list(zip(rest["card_set"], rest["evidence_level"]))).values
+        rest["x"] = [deltas[int(h)] for h in rest["handicap"]]
+        rest = rest.dropna(subset=["d"])
+        if rest.empty or float((rest["x"] ** 2).sum()) == 0:
+            continue
+
+        def slope(r: pd.DataFrame) -> float:
+            return float(-(r["x"] * r["d"]).sum() / (r["x"] ** 2).sum())
+
+        b = slope(rest)
+        sets = rest["card_set"].unique()
+        groups = {k: g for k, g in rest.groupby("card_set")}
+        rng = np.random.default_rng(seed)
+        boots = [slope(pd.concat([groups[k] for k in rng.choice(sets, size=len(sets))])) for _ in range(500)]
+        out.append({"version": "placebo" if version else "real", "per_star_drop": b,
+                    "se": float(np.std(boots, ddof=1)) if len(sets) > 1 else float("nan"),
+                    "n_card_sets": int(len(sets)), "n_cells": int(len(rest))})
+    return out
+
+
+def manipulation_ratio(resp: list[dict[str, Any]], table: pd.DataFrame) -> float:
+    """Scale-free strength of the evidence manipulation: the placebo version's per-star handicap response
+    divided by the median |ne_e0| over entities (how far one star moves the score, in units of a typical
+    name effect). NaN if not estimable."""
+    plac = [r for r in resp if r["version"] == "placebo"]
+    if not plac or "ne_e0" not in table:
+        return float("nan")
+    scale = float(np.nanmedian(np.abs(table["ne_e0"].values))) if len(table) else float("nan")
+    return float(plac[0]["per_star_drop"] / scale) if scale and np.isfinite(scale) and scale > 0 else float("nan")
+
+
+def _chance(a: pd.Series, b: pd.Series) -> float:
+    """Agreement expected from the two marginal letter distributions alone (unparsed answers never match)."""
+    n = len(a)
+    if n == 0:
+        return float("nan")
+    fa, fb = a.value_counts() / n, b.value_counts() / n
+    return float(sum(fa.get(L, 0.0) * fb.get(L, 0.0) for L in LETTERS))
 
 
 def consistency(scores: pd.DataFrame) -> dict[str, Any]:
-    """Agreement of the scored letter argmax with the model's FREE greedy answer (spec §7.1 check; unparsed
-    answers count as disagreement), plus the prefilled-continuation format check when present."""
+    """Spec §7.1 check on the 2% sample: the FREE greedy answer vs the scored argmax.
+
+    Overall agreement is against the primary (O5) argmax; unparsed answers count as disagreement. Per mode:
+    immediate answers vs the free-position argmax (O3), deferred answers vs the forced-position argmax (O4,
+    a direct test of the O5 imputation). Each comes with its chance level from the marginal frequencies."""
     chk = scores[scores["gen_text"].notna()]
     n = len(chk)
+    out: dict[str, Any] = {"n_checked": int(n), "agreement": float("nan"), "chance": float("nan"), "n_unparsed": 0}
     if n == 0:
-        return {"n_checked": 0, "agreement": float("nan"), "n_unparsed": 0}
-    out = {"n_checked": int(n), "agreement": float((chk["gen_letter"] == chk["argmax_letter"]).mean()),
-           "n_unparsed": int(chk["gen_letter"].isna().sum())}
-    if "gen_letter_prefilled" in chk:
-        pref = chk[chk["gen_text_prefilled"].notna()]
-        if len(pref):
-            out["prefilled_agreement"] = float((pref["gen_letter_prefilled"] == pref["argmax_letter"]).mean())
+        return out
+    out.update(agreement=float((chk["gen_letter"] == chk["argmax_letter"]).mean()),
+               chance=_chance(chk["gen_letter"], chk["argmax_letter"]), n_unparsed=int(chk["gen_letter"].isna().sum()))
+    if "gen_mode" in chk:
+        for mode, ref in (("immediate", "argmax_free"), ("deferred", "argmax_forced")):
+            sub = chk[chk["gen_mode"] == mode]
+            out[f"n_{mode}"] = int(len(sub))
+            if len(sub) and ref in sub:
+                out[f"agreement_{mode}"] = float((sub["gen_letter"] == sub[ref]).mean())
+                out[f"chance_{mode}"] = _chance(sub["gen_letter"], sub[ref])
+                out[f"n_unparsed_{mode}"] = int(sub["gen_letter"].isna().sum())
     return out
 
 
@@ -304,6 +448,10 @@ def positional_bias(scores: pd.DataFrame, meta: pd.DataFrame) -> pd.DataFrame:
 # --------------------------------------------------------------------------- summary
 _SIGNED_MARKERS = ("ne_e", "name_effect", "residual", "ladder_fit", "s_real", "s_placebo", "slope", "coef", "gap",
                    "ci_")
+
+
+def _pct(v: Any) -> str:
+    return "—" if v is None or not np.isfinite(v) else f"{v:.1%}"
 
 
 def _fmt(v: Any, signed: bool = False) -> str:
@@ -327,7 +475,7 @@ def _md_table(df: pd.DataFrame) -> list[str]:
 
 def summarize_measure(cfg: Config, model_id: str, split: str, items: list[dict[str, Any]],
                       catalogue: list[dict[str, Any]], scores: pd.DataFrame, sdir, elapsed: float) -> dict[str, Any]:
-    from rtp.measure.choice import LOW_LETTER_MASS
+    from rtp.measure.choice import DEFERRED_MAX_TOKENS, LOW_COVERAGE
 
     meta = items_meta(items)
     pairs = rotation_average(scores, meta)
@@ -342,71 +490,105 @@ def summarize_measure(cfg: Config, model_id: str, split: str, items: list[dict[s
     bias = positional_bias(scores, meta)
     sens = evidence_sensitivity(pairs, pair_covariates(items))
     responds = responds_to_ratings(sens)
-    by_level = mass_by_level(scores, meta)
-    nm = name_mass_by_entity(scores, meta)
-    max_gap = float(nm["gap"].max()) if len(nm) else float("nan")
-    gap_warn = bool(np.isfinite(max_gap) and max_gap > NAME_MASS_GAP_WARN)
-    ne_credit = paired_name_effect(rotation_average(scores, meta, col="s_target_credit"))
-    credit_table = entity_evidence_table(ne_credit)
+    resp = handicap_response(pairs, cfg.data.handicap_rating_deltas, cfg.seed)
+    ratio = manipulation_ratio(resp, table)
+    cov = coverage_by_level(scores, meta)
+    shifts = format_stability(cov)
+    chan = channel_by_entity(scores, meta)
+    est = estimator_table(scores, meta)
+    est_agree = estimator_agreement(est)
+    bounds = name_effect_bounds(scores, meta, level=0)
 
     io.write_parquet(sdir / "pair_scores.parquet", pairs)
     io.write_parquet(sdir / "name_effects.parquet", ne)
     io.write_parquet(sdir / "entity_evidence.parquet", table)
-    io.write_parquet(sdir / "entity_evidence_credit.parquet", credit_table)
+    io.write_parquet(sdir / "estimators_by_entity.parquet", est)
     io.write_parquet(sdir / "handicap_effects.parquet", hcap)
-    io.write_parquet(sdir / "name_mass_by_entity.parquet", nm)
+    io.write_parquet(sdir / "coverage_by_level.parquet", cov)
+    io.write_parquet(sdir / "answer_channel_by_entity.parquet", chan)
     io.write_json(sdir / "ladder_regression.json", {"spec": reg, "variants": fits})
-    io.write_json(sdir / "evidence_sensitivity.json", {"rows": sens, "responds_to_ratings": responds})
+    io.write_json(sdir / "evidence_sensitivity.json", {"rows": sens, "responds_to_ratings": responds,
+                                                      "handicap_response": resp, "manipulation_ratio": ratio})
     io.write_json(sdir / "consistency.json", cons)
+    io.write_json(sdir / "answer_format.json", {"format_shifts": shifts, "estimator_agreement": est_agree,
+                                               "bounds_e0": bounds})
 
     warn = cons["n_checked"] > 0 and cons["agreement"] < cfg.measure.consistency_warn_below
-    mass = float(scores["letter_mass"].mean())
-    mass_warn = mass < LOW_LETTER_MASS
+    c_free, c_forced = float(scores["c_free"].mean()), float(scores["c_forced"].mean())
+    cov_warn = c_forced < LOW_COVERAGE
+    manip_warn = bool(np.isfinite(ratio) and ratio < MANIPULATION_RATIO_MIN)
     lines = [f"# Measure summary: {model_id} ({split})", "",
              f"- config: {cfg.name} (data hash `{cfg.data_hash}`); items: {len(scores)}; pairs: {len(ne)}; "
              f"elapsed: {elapsed:.0f}s",
-             f"- mean probability mass on letter tokens A-D at the scored position (after the \"Answer:\" prefill, "
-             f"before renormalisation): {mass:.3f}"]
-    if mass_warn:
-        lines.append(f"- **WARNING: mean letter mass {mass:.3f} < {LOW_LETTER_MASS}: the model is not answering with "
-                     f"a letter at the scored position (wrong prompt mode or template?); letter scores are mostly "
-                     f"noise.**")
-    lines += ["", "## Consistency check (scored letter argmax vs the model's free greedy answer)", "",
-              f"- checked {cons['n_checked']} items ({cfg.measure.gen_check_fraction:.0%} sample), generated WITHOUT "
-              f"the \"Answer:\" prefill and mapped to an option by letter or brand name; agreement "
-              f"{cons['agreement']:.1%}; answers naming no option: {cons['n_unparsed']}",
-              f"- format check (greedy continuation of the prefilled scored prompt): agreement "
-              f"{cons.get('prefilled_agreement', float('nan')):.1%}"]
+             "- scores: answer-path estimator O5 (free answers at the spec position; the deferred rest imputed by "
+             "the committed answer after \"Answer:\"), counting letter AND displayed-name answers.",
+             "", "## Answer coverage and format", "",
+             f"Coverage c = probability that the next tokens start an answer naming one of the four options (letter "
+             f"or name). Mean c_free (spec position) = {c_free:.3f}; mean c_forced (after \"Answer:\") = "
+             f"{c_forced:.3f}. 1 - c_free is the deferred (imputed) share. name_share = fraction of the option "
+             f"answers given by brand NAME. leak = mass on the target slot's ABSENT identity (credited to no "
+             f"option). pruned = upper bound on answer mass lost to trie pruning.", ""]
+    lines += _md_table(cov)
+    if cov_warn:
+        lines.append(f"- **WARNING: mean c_forced {c_forced:.3f} < {LOW_COVERAGE}: even after \"Answer:\" the model "
+                     f"mostly does not name an option (wrong prompt mode or template?).**")
+    if c_free < LOW_COVERAGE:
+        lines.append(f"- note: c_free {c_free:.3f} < {LOW_COVERAGE}: {1 - c_free:.0%} of the free-position mass "
+                     f"defers the answer, so O5 relies on the forced readout for that share; compare O3/O4 and the "
+                     f"bounds below.")
+    if shifts:
+        lines.append(f"- **WARNING: the free-position answer format changes with the evidence level (shift > "
+                     f"{FORMAT_SHIFT_WARN} vs evidence 0); the ladder then compares different readouts:**")
+        lines += [""] + _md_table(pd.DataFrame(shifts))
+    lines += ["", "## Consistency check (spec §7.1: free greedy answer vs the scored argmax)", "",
+              f"- checked {cons['n_checked']} items ({cfg.measure.gen_check_fraction:.0%} sample), generated from the "
+              f"free position; agreement with the O5 argmax {_pct(cons['agreement'])} (chance "
+              f"{_pct(cons['chance'])}); answers naming no option: {cons['n_unparsed']}",
+              f"- immediate answers (option named within {cfg.measure.gen_max_new_tokens} tokens): "
+              f"{cons.get('n_immediate', 0)}, agreement with the free argmax "
+              f"{_pct(cons.get('agreement_immediate'))} (chance {_pct(cons.get('chance_immediate'))})",
+              f"- deferred answers (continued to {DEFERRED_MAX_TOKENS} tokens, concluding answer parsed): "
+              f"{cons.get('n_deferred', 0)}, agreement with the forced argmax "
+              f"{_pct(cons.get('agreement_deferred'))} (chance {_pct(cons.get('chance_deferred'))}; unparsed "
+              f"{cons.get('n_unparsed_deferred', 0)}). This tests the O5 imputation (deferred answer = committed "
+              f"answer after \"Answer:\")."]
     if warn:
         lines.append(f"- **WARNING: agreement {cons['agreement']:.1%} is below "
-                     f"{cfg.measure.consistency_warn_below:.0%}; first-token letter scores may not reflect what "
-                     f"the model would answer.**")
+                     f"{cfg.measure.consistency_warn_below:.0%}; the scores may not reflect what the model would "
+                     f"answer.**")
+    lines += ["", "## Estimators and bounds", "",
+              "Entity name effects under O5 (primary), O3 (free position only, renormalised over immediate "
+              "answers) and O4 (forced position only). Spearman correlation across entities:", ""]
+    lines += _md_table(pd.DataFrame(est_agree)) if est_agree else ["(not estimable)"]
+    if bounds.get("n_entities"):
+        lines.append(f"- imputation-free bounds at evidence 0 (deferred mass assigned adversarially): "
+                     f"{bounds['share_excluding_zero']:.0%} of {bounds['n_entities']} entities have bounds excluding "
+                     f"0; median width {bounds['median_width']:.2f} logits.")
     lines += ["", "## Does the model use the card evidence? (manipulation check)", "",
-              "OLS of the rotation-averaged s_target on how the target's card compares with the other options. "
-              "A model that weighs evidence has a clearly positive rating_gap coefficient (and usually a negative "
-              "price coefficient). If it does not, a flat evidence ladder means the evidence was ignored, not that "
-              "it overrode reputation.", ""]
+              "Within matched card sets, the drop in s_target per star removed from the target's rating (handicap "
+              "cells vs handicap 0, evidence >= 3; cluster-bootstrap SE over card sets). The manipulation ratio "
+              "divides the placebo version's per-star drop by the median |ne_e0|: below "
+              f"{MANIPULATION_RATIO_MIN} (provisional), one star moves the score by less than a quarter of a typical "
+              "name effect, and a flat ladder means the evidence was too weak, not that reputation resisted it.", ""]
+    lines += _md_table(pd.DataFrame(resp)) if resp else ["(not estimable: no matched handicap cells)"]
+    lines.append(f"- manipulation ratio: {_fmt(ratio)}")
+    if manip_warn:
+        lines.append(f"- **WARNING: manipulation ratio {ratio:.3f} < {MANIPULATION_RATIO_MIN}: the evidence "
+                     f"manipulation is weak relative to the name effects; do not read the ladder as 'evidence "
+                     f"overrides reputation'.**")
+    lines += ["", "Across pairs (OLS of the rotation-averaged s_target on the target's card gaps):", ""]
     lines += _md_table(pd.DataFrame(sens)) if sens else ["(not estimable: no evidence >= 2 pairs)"]
     if responds is False:
         lines.append("- **WARNING: the rating coefficient is not clearly positive in both versions: the model does "
                      "not respond to the rating evidence, so the evidence ladder below cannot be read as "
                      "'evidence overrides reputation'.**")
-    lines += ["", "## Does the model answer with the brand NAME instead of a letter?", "",
-              "Mass of each option's name-first token at the scored position (an upper bound on answering with the "
-              "name). Letter scores ignore this mass; if it differs between the real and placebo versions it can "
-              "hide or fake a name effect. `s_target_credit` adds it to the option's letter mass (sensitivity "
-              "estimator, last table).", ""]
-    lines += _md_table(by_level)
-    lines += ["", "Entities with the largest real-minus-placebo target name mass:", ""]
-    lines += _md_table(nm.head(10))
-    if gap_warn:
-        lines.append(f"- **WARNING: the target's name-first-token mass is up to {max_gap:.3f} higher in the real "
-                     f"version than in the placebo version (> {NAME_MASS_GAP_WARN}); compare the letter-based name "
-                     f"effects with the credited ones below before interpreting them.**")
-    coll = nm[nm["real_name_collides_with_letter"]]["entity"].tolist()
-    if coll:
-        lines.append(f"- real brand names whose first token is an option letter (a name answer counts as that "
-                     f"letter): {', '.join(coll)}")
+    if len(chan):
+        lines += ["", "## Answer channel and identity leak per entity (free position)", "",
+                  "name_share = share of the target's answer mass given by NAME; leak = mass on the absent identity "
+                  "(placebo version: the model names the real brand that is not on the list). Name answers are "
+                  "credited to their option, so a real-vs-placebo gap here is information, not a bias in O5.", ""]
+        sort_col = "name_share_gap" if "name_share_gap" in chan else chan.columns[-1]
+        lines += _md_table(chan.sort_values(sort_col, ascending=False).head(10))
     lines += ["", "## Position bias (before rotation averaging)", ""] + _md_table(bias)
     ne_cols = ["category", "entity", "natural_negative"] + [c for c in table.columns if c.startswith("ne_")] + \
         ["ladder_residual", "n_pairs"]
@@ -415,7 +597,8 @@ def summarize_measure(cfg: Config, model_id: str, split: str, items: list[dict[s
               "`ne_e4` averages handicaps 0-4; `ne_e4_h0` uses handicap 0 only. Positive = the real name helps.", ""]
     lines += _md_table(table[[c for c in ne_cols if c in table.columns]])
     se_cols = ["category", "entity"] + [c for c in table.columns if c.startswith(("se_", "n_e"))]
-    lines += ["", "Standard errors and pair counts:", ""] + _md_table(table[se_cols])
+    lines += ["", "Standard errors and independent units (card sets, or pairs at evidence 0):", ""]
+    lines += _md_table(table[se_cols])
     lines += ["", "## Evidence ladder regressions (Huber, through the origin; 95% bootstrap CI over entities)", ""]
     lines += _md_table(pd.DataFrame(fits))
     lines += ["- `ladder_residual` above = ne_e4 - slope * ne_e0 for the spec variant (behaviour-only "
@@ -426,13 +609,13 @@ def summarize_measure(cfg: Config, model_id: str, split: str, items: list[dict[s
               "", "## Name effect by handicap (evidence >= 3, mean over entities)", ""]
     hpiv = hcap.groupby(["evidence_level", "handicap"])["name_effect"].mean().reset_index()
     lines += _md_table(hpiv)
-    lines += ["", "## Sensitivity: name effects with name-answer mass credited to its option", ""]
-    lines += _md_table(credit_table[["category", "entity"] + [c for c in credit_table.columns if c.startswith("ne_")]])
     io.atomic_write_text(sdir / "summary.md", "\n".join(lines) + "\n")
+    rnd = lambda v: round(float(v), 4) if v is not None and np.isfinite(v) else None  # noqa: E731
     return {"model_id": model_id, "split": split, "n_items": int(len(scores)), "n_pairs": int(len(ne)),
             "consistency": cons, "consistency_warning": bool(warn), "ladder_slope": reg.get("slope"),
             "ladder_variants": fits, "responds_to_ratings": responds,
-            "name_mass_max_gap": round(max_gap, 4) if np.isfinite(max_gap) else None,
-            "name_mass_warning": gap_warn,
-            "mean_letter_mass": round(mass, 4), "letter_mass_warning": bool(mass_warn),
+            "c_free": rnd(c_free), "c_forced": rnd(c_forced), "coverage_warning": bool(cov_warn),
+            "format_shifts": len(shifts), "format_warning": bool(shifts),
+            "manipulation_ratio": rnd(ratio), "manipulation_warning": manip_warn,
+            "bounds_e0": bounds, "estimator_agreement": est_agree,
             "elapsed_s": round(elapsed, 1)}

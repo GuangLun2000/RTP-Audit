@@ -1,7 +1,7 @@
 """``python -m rtp.cli smoke``: small end-to-end run on the smoke model.
 
 Steps: M0 load + one forward pass -> M1 build data -> seal check -> M2 measure ->
-M2 open-ended -> M3 extract -> M3 probe -> report. Starts from a clean ``runs/<config name>/``
+M2 open-ended -> M3 extract -> M3 probe -> M3 localize -> report. Starts from a clean ``runs/<config name>/``
 unless ``--resume``.
 """
 
@@ -134,12 +134,14 @@ def run_smoke(config_path: str = "configs/smoke.yaml", resume: bool = False, ove
 
     # ---- M3
     from rtp.detect.activations import run_extract
+    from rtp.detect.localize import run_localize
     from rtp.detect.probes import run_probe
 
     edir = step("extract", lambda: run_extract(cfg, model_id, split="dev"))
     pdir = step("probe", lambda: run_probe(cfg, model_id))
+    ldir = step("localize", lambda: run_localize(cfg, model_id))
     rpath = step("report", lambda: run_report(cfg))
-    for d in (ddir, mdir, odir, edir, pdir):
+    for d in (ddir, mdir, odir, edir, pdir, ldir):
         if not io.is_done(d) or not (d / "summary.md").exists():
             raise SmokeFailure(f"stage dir {d} lacks _DONE or summary.md")
     info = io.read_json(mdir / io.DONE_FILE)
@@ -149,9 +151,11 @@ def run_smoke(config_path: str = "configs/smoke.yaml", resume: bool = False, ove
     log.info("SMOKE PASSED in %.1fs on %s", total, hw)
     for name, sec in timings.items():
         log.info("  %-16s %7.1fs", name, sec)
-    log.info("free-answer consistency (greedy answer WITHOUT prefill vs scored letter argmax): %s on %d items%s",
-             f"{cons['agreement']:.1%}" if cons["n_checked"] else "n/a", cons["n_checked"],
-             "  (WARNING: below threshold)" if info.get("consistency_warning") else "")
+    log.info("free-answer consistency (greedy free answer vs O5 argmax): %s on %d items (chance %s; immediate %d, "
+             "deferred %d)%s", f"{cons['agreement']:.1%}" if cons["n_checked"] else "n/a", cons["n_checked"],
+             f"{cons['chance']:.1%}" if cons["n_checked"] else "n/a", cons.get("n_immediate", 0),
+             cons.get("n_deferred", 0), "  (WARNING: below threshold)" if info.get("consistency_warning") else "")
+    log.info("answer coverage: c_free %s, c_forced %s", info.get("c_free"), info.get("c_forced"))
     log.info("outputs: %s | %s | %s", mdir, odir, rpath)
     if total > SMOKE_BUDGET_SECONDS:
         log.warning("smoke took %.0fs, above the %ds budget (the budget is defined for a GPU)", total,

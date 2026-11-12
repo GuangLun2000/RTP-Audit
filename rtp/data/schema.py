@@ -21,7 +21,7 @@ class SchemaError(ValueError):
 _NUM = (int, float)
 CATALOGUE_FIELDS = {"category": str, "entity": str, "is_placebo": bool, "tier": (str, type(None)), "aliases": list,
                     "split": str, "natural_negative": (str, type(None)), "match_case": bool}
-CHOICE_FIELDS = {"item_id": str, "pair_id": str, "split": str, "category": str, "evidence_level": int,
+CHOICE_FIELDS = {"item_id": str, "pair_id": str, "card_set": str, "split": str, "category": str, "evidence_level": int,
                  "handicap": int, "target_entity": str, "target_is_placebo": bool, "rotation": int,
                  "target_label": str, "pair_entity": str, "placebo_substitute": str, "options": list, "prompt": str}
 OPTION_FIELDS = {"label": str, "name": str, "role": str, "is_placebo": bool, "description": (str, type(None)),
@@ -98,14 +98,26 @@ def validate_choice_items(items: list[dict[str, Any]]) -> int:
         pairs[it["pair_id"]].append(it)
     for pid, group in pairs.items():
         _check_pair(pid, group)
+    _check_card_sets(items)
     return len(items)
+
+
+def _check_card_sets(items: list[dict[str, Any]]) -> None:
+    """Matched cards: within a card set, every cell shows the same options in the same order (names, roles,
+    non-target cards); cells differ only in visible evidence and the target's handicapped rating."""
+    ref: dict[tuple[str, bool, int], tuple[Any, ...]] = {}
+    for it in items:
+        key = (it["card_set"], it["target_is_placebo"], it["rotation"])
+        sig = (it["pair_entity"], it["placebo_substitute"], tuple((o["name"], o["role"]) for o in it["options"]))
+        if ref.setdefault(key, sig) != sig:
+            raise SchemaError(f"card set {it['card_set']}: options differ between cells (item {it['item_id']})")
 
 
 def _check_pair(pair_id: str, group: list[dict[str, Any]]) -> None:
     keys = sorted((g["target_is_placebo"], g["rotation"]) for g in group)
     if keys != [(False, r) for r in range(4)] + [(True, r) for r in range(4)]:
         raise SchemaError(f"pair {pair_id}: needs real+placebo x 4 rotations, got {keys}")
-    shared = ("split", "category", "evidence_level", "handicap", "pair_entity", "placebo_substitute")
+    shared = ("card_set", "split", "category", "evidence_level", "handicap", "pair_entity", "placebo_substitute")
     for k in shared:
         if len({g[k] for g in group}) != 1:
             raise SchemaError(f"pair {pair_id}: field '{k}' differs within the pair")

@@ -1,4 +1,4 @@
-"""Stage identity and provenance checks for per-model stages (measure, open-ended).
+"""Stage identity and provenance checks for per-model stages (measure, open-ended, extract, probe, localize).
 
 A stage dir is owned by one hash of: stage settings, model, split, prompt mode, the sha256 of
 the input files it reads, and the digest of the code that computes it. Its metadata also
@@ -19,7 +19,8 @@ from rtp.provenance import RESUME_CRITICAL, environment, stage_code_digest
 log = logging.getLogger(__name__)
 
 STAGE_MODULES = {"measure": "rtp.measure.choice", "open_ended": "rtp.measure.open_ended",
-                 "extract": "rtp.detect.activations", "probe": "rtp.detect.probes"}
+                 "extract": "rtp.detect.activations", "probe": "rtp.detect.probes",
+                 "localize": "rtp.detect.localize"}
 
 
 def stage_inputs_digest(cfg: Config, kind: str, split: str, model_id: str | None = None) -> str:
@@ -29,7 +30,7 @@ def stage_inputs_digest(cfg: Config, kind: str, split: str, model_id: str | None
 
     manifest = io.read_json(require_built(cfg) / "data_manifest.json")
     sha = manifest["sha256"]
-    if kind == "measure":
+    if kind in ("measure", "localize"):
         parts = [sha[f"{split}/{CHOICE}"], sha[CATALOGUE]]
     elif kind == "open_ended":  # the catalogue and the seed snapshot (brands, aliases, Appendix A)
         snap = manifest["seed_snapshot_sha256"]

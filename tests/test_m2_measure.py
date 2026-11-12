@@ -7,13 +7,11 @@ import math
 import numpy as np
 import pandas as pd
 import pytest
-import torch
 
 from rtp.config import config_from_dict
 from rtp.data.build import generate
 from rtp.data.choice_items import LETTERS
-from rtp.measure.choice import (letter_logprobs, letter_token_ids, normalize_letters, parse_letter, s_target,
-                                select_gen_check)
+from rtp.measure.choice import letter_token_ids, parse_letter, s_target, select_gen_check
 from rtp.measure.name_effect import (consistency, entity_evidence_table, items_meta, ladder_regression,
                                      paired_name_effect, robust_origin_regression, rotation_average)
 from rtp.measure.open_ended import (BrandMatcher, aggregate_picks, brand_variants, compute_shares,
@@ -39,15 +37,6 @@ def test_letter_token_ids_merges_whitespace_variants():
     assert ids == {"A": [0, 1, 2], "B": [3, 4], "C": [5], "D": [6, 7]}
     with pytest.raises(ValueError):
         letter_token_ids(FakeTok(["A", "B", "C"]))
-
-
-def test_letter_logsumexp_and_renormalisation():
-    probs = torch.tensor([[0.1, 0.1, 0.2, 0.05, 0.05, 0.5]])  # ids 0,1 -> A ; 2 -> B ; 3 -> C ; 4 -> D ; 5 other
-    ids = {"A": [0, 1], "B": [2], "C": [3], "D": [4]}
-    lp = letter_logprobs(torch.log(probs), ids)
-    assert torch.allclose(lp.exp(), torch.tensor([[0.2, 0.2, 0.05, 0.05]]), atol=1e-6)
-    p = normalize_letters(lp.numpy())
-    assert np.allclose(p, [[0.4, 0.4, 0.1, 0.1]]) and np.isclose(p.sum(), 1.0)
 
 
 def test_s_target_log_odds_and_clipping():
@@ -80,7 +69,7 @@ def test_consistency_counts_unparsed_as_disagreement():
     df = pd.DataFrame({"argmax_letter": ["A", "B", "C", "D"], "gen_letter": ["A", None, "C", "A"],
                        "gen_text": ["A", "Nike", "C", "A"]})
     c = consistency(pd.concat([df, pd.DataFrame({"argmax_letter": ["A"], "gen_letter": [None], "gen_text": [None]})]))
-    assert c == {"n_checked": 4, "agreement": 0.5, "n_unparsed": 1}
+    assert c == {"n_checked": 4, "agreement": 0.5, "n_unparsed": 1, "chance": pytest.approx(0.1875)}
 
 
 # --------------------------------------------------------------------------- synthetic choice model

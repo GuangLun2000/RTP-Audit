@@ -14,10 +14,8 @@ import yaml
 from rtp import io
 from rtp.config import REPO_ROOT, config_from_dict
 from rtp.data.build import build_data, generate
-from rtp.measure.choice import credited_probs, name_first_token_ids, option_name_ids, s_target
-from rtp.measure.name_effect import (entity_evidence_table, evidence_sensitivity, ladder_fits, name_mass_by_entity,
-                                     ols, pair_covariates, paired_name_effect, responds_to_ratings, rotation_average,
-                                     items_meta)
+from rtp.measure.name_effect import (entity_evidence_table, evidence_sensitivity, items_meta, ladder_fits, ols,
+                                     pair_covariates, responds_to_ratings, rotation_average)
 
 
 def tiny(**data):
@@ -25,55 +23,6 @@ def tiny(**data):
             "probe_entities_per_category": 1, "probe_templates": 1}
     base.update(data)
     return config_from_dict({"name": "pp", "seed": 5, "data": base})
-
-
-# --------------------------------------------------------------------------- A1 name-answer diagnostics
-class SplitTok:
-    """Fake tokenizer: ' X' -> [hash(' X'[:3])], 'X' -> [hash('X'[:2])]; 'D...' starts with the letter token 'D'."""
-
-    def __init__(self):
-        self.vocab = {}
-
-    def _id(self, piece):
-        return self.vocab.setdefault(piece, len(self.vocab) + 100)
-
-    def __call__(self, text, add_special_tokens=False):
-        if text.lstrip().startswith("D"):  # e.g. "Dell" -> "D" + "ell"
-            first = " D" if text.startswith(" ") else "D"
-        else:
-            first = text[:3] if text.startswith(" ") else text[:2]
-        return {"input_ids": [self._id(first), self._id("rest")]}
-
-
-def test_name_first_tokens_and_letter_collisions():
-    tok = SplitTok()
-    letters = {tok._id(x) for x in ("A", " A", "B", " B", "C", " C", "D", " D")}
-    ids, coll = name_first_token_ids(tok, "Nike", letters)
-    assert len(ids) == 2 and not coll
-    ids, coll = name_first_token_ids(tok, "Dell", letters)
-    assert ids == [] and coll  # both forms start with a letter token
-    items = [{"options": [{"name": "Nike"}, {"name": "Nikon"}, {"name": "Asics"}, {"name": "Dell"}]}]
-    per, colls = option_name_ids(tok, items, letters)
-    assert per[0][0] == [] and per[0][1] == []  # 'Ni' / ' Ni' shared by Nike and Nikon -> ambiguous, dropped
-    assert per[0][2] and colls[0] == [False, False, False, True]
-
-
-def test_credited_probs():
-    letter_lp = np.log([[0.10, 0.05, 0.05, 0.05]])  # the model mostly says the brand name instead of a letter
-    name_mass = np.array([[0.60, 0.0, 0.0, 0.0]])
-    p = credited_probs(letter_lp, name_mass)
-    assert np.isclose(p.sum(), 1.0) and p[0, 0] == pytest.approx(0.70 / 0.85)
-    plain = np.exp(letter_lp) / np.exp(letter_lp).sum()
-    assert s_target(p[0, 0]) > s_target(plain[0, 0])
-
-
-def test_name_mass_by_entity_gap():
-    scores = pd.DataFrame({"item_id": ["a", "b", "c", "d"], "name_mass_target": [0.30, 0.10, 0.0, 0.0],
-                           "target_name_collision": [False, False, False, False]})
-    meta = pd.DataFrame({"item_id": ["a", "b", "c", "d"], "category": "c", "pair_entity": "E",
-                         "target_is_placebo": [False, False, True, True]})
-    nm = name_mass_by_entity(scores, meta)
-    assert nm.iloc[0]["gap"] == pytest.approx(0.20)
 
 
 # --------------------------------------------------------------------------- A3 balanced evidence-0 cell
@@ -261,7 +210,7 @@ def test_measure_digest_ignores_m3_data_generators_and_registry():
     assert "rtp.measure.choice" in used and "rtp.infer" in used
 
 
-def test_free_answer_mapping_and_name_collisions():
+def test_free_answer_mapping():
     from rtp.measure.choice import parse_answer
 
     opts = [{"label": "A", "name": "Nike"}, {"label": "B", "name": "Bevodel"}, {"label": "C", "name": "Asics"},
@@ -269,9 +218,3 @@ def test_free_answer_mapping_and_name_collisions():
     for text, want in [("B", "B"), ("Nike", "A"), ("I would go with Asics.", "C"), ("Bev", "B"), ("Hokas", "D"),
                        ("Based on the", None), ("Puma", None)]:
         assert parse_answer(text, opts) == want, text
-    tok = SplitTok()
-    letters = {tok._id(x) for x in ("A", " A", "B", " B", "C", " C", "D", " D")}
-    # three options sharing a first token: all three lose it (pairwise removal used to keep it for the third)
-    items = [{"options": [{"name": "Nike"}, {"name": "Nikon"}, {"name": "Nissan"}, {"name": "Asics"}]}]
-    per, _ = option_name_ids(tok, items, letters)
-    assert per[0][:3] == [[], [], []] and per[0][3]

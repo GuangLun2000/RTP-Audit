@@ -27,7 +27,10 @@ with an isotropic random subspace (any data-derived subspace beats that on aniso
   with a within-category permutation p-value (pooled correlations pass on category price levels alone);
 * familiarity: entity-level AUC of the continuous popularity score for real brands vs placebos, vs the
   same AUC from a shuffled-label probe (lexical real/placebo differences let ANY probe separate them).
-Readiness checks ignore the embedding layer (index 0) and correct p-values for the number of layers.
+Nulls: ``probe.n_null_k`` entity-level label shuffles per frame (the same shuffles at every layer). Per layer
+the permutation p is (1 + #null >= observed) / (1 + n); across layers, a max-over-layers null (each shuffle's
+largest standardised statistic over the eligible layers) gives a family-wise p, so picking the best layer
+after the fact does not inflate significance. Readiness checks ignore the embedding layer (index 0).
 """
 
 from __future__ import annotations
@@ -53,10 +56,9 @@ log = logging.getLogger(__name__)
 TIER_LEVEL = {"budget": 0, "mid": 1, "premium": 2}  # catalogue tier -> price_tier level
 SELECTIVITY_WARN = 0.05
 BINDING_WARN = 0.05
-CAPTURE_EXCESS_WARN = 1.2   # K capture must exceed 1.2x the shuffled-label K capture ...
-CAPTURE_SD_WARN = 2.0       # ... and its mean by 2 SD of the shuffled-label K captures
-AUC_EXCESS_WARN = 0.05      # popularity AUC (real vs placebo) above the shuffled-label probe's AUC
-N_CONTROL_K = 3
+CAPTURE_EXCESS_WARN = 1.2   # K capture must exceed 1.2x the mean shuffled-label K capture ...
+AUC_EXCESS_WARN = 0.05      # popularity AUC (real vs placebo) above the mean shuffled-label probe's AUC ...
+FWER_ALPHA = 0.05           # ... and beat the shuffled-label null with a max-over-layers permutation p below this
 N_TIER_PERMUTATIONS = 1000
 
 
@@ -309,6 +311,7 @@ def run_probe(cfg: Config, model_id: str, force: bool = False, prompt_mode: str 
         ne0 = _measured_ne0(cfg, model_id)
         frames = [f for f in cfg.data.probe_frames if (p_idx["frame"] == f).any()]
         metrics, binding, transfer = [], [], []
+        null_store: dict[tuple[str, int], dict[str, np.ndarray]] = {}
         k_meta: dict[str, Any] = {"layers": layers, "frames": frames, "k_rank": pr.k_rank, "files": {},
                                   "construction": "QR[Haufe patterns, entity-averaged level-mean PCs, probe weights]"}
         for frame in frames:
@@ -343,15 +346,21 @@ def run_probe(cfg: Config, model_id: str, force: bool = False, prompt_mode: str 
                                                         "independent_directions": n_dirs,
                                                         "truncated": n_dirs > pr.k_rank}
                 if c_idx is not None:
-                    nulls = shuffled_fits(X, ents, labels, fitted, N_CONTROL_K, cfg.seed)
+                    nulls = shuffled_fits(X, ents, labels, fitted, pr.n_null_k, cfg.seed)
                     null_ks = [build_k(X, ents, lab, full, {a: f[a][0] for a in ATTRIBUTES}, pr.k_rank)[0]
                                for lab, f in nulls]
-                    transfer.append(_transfer_row(frame, layer, li, fitted, K, null_ks, nulls[0][1], c_idx, c_acts,
-                                                  tiers, ne0, pr, cfg.seed))
+                    row, null_vals = _transfer_row(frame, layer, li, fitted, K, null_ks, [f for _, f in nulls],
+                                                   c_idx, c_acts, tiers, ne0, pr, cfg.seed)
+                    transfer.append(row)
+                    null_store[(frame, layer)] = null_vals
                 binding.extend(_binding_rows(frame, layer, li, fitted, p_idx, p_acts, heldout))
                 log.info("probe: frame=%s layer=%d done (cv acc %s)", frame, layer,
                          {r["attribute"]: round(r["cv_acc"], 2) for r in metrics[-len(ATTRIBUTES):]})
         mdf, bdf, tdf = pd.DataFrame(metrics), pd.DataFrame(binding), pd.DataFrame(transfer)
+        tdf = add_familywise_p(tdf, null_store, layers)
+        if null_store:
+            np.savez_compressed(sdir / "nulls.npz", **{f"{f}:{lv}:{k}": v for (f, lv), d in null_store.items()
+                                                       for k, v in d.items()})
         io.write_parquet(sdir / "probe_metrics.parquet", mdf)
         io.write_parquet(sdir / "binding.parquet", bdf)
         io.write_parquet(sdir / "transfer.parquet", tdf)
@@ -400,7 +409,10 @@ def _entity_auc(score: np.ndarray, real: np.ndarray, names: np.ndarray) -> float
     return float(roc_auc_score(df["real"].astype(int), df["s"]))
 
 
-def _transfer_row(frame, layer, li, fitted, K, null_ks, null_fits, c_idx, c_acts, tiers, ne0, pr, seed) -> dict:
+def _transfer_row(frame, layer, li, fitted, K, null_ks, null_fits, c_idx, c_acts, tiers, ne0, pr,
+                  seed) -> tuple[dict, dict[str, np.ndarray]]:
+    """One (frame, layer) row of transfer / familiarity / K-capture diagnostics, plus the null values per shuffle
+    (``k_capture``, ``popularity_auc``) for the family-wise test."""
     from scipy.stats import spearmanr
 
     full = fitted["full"]
@@ -426,8 +438,9 @@ def _transfer_row(frame, layer, li, fitted, K, null_ks, null_fits, c_idx, c_acts
     pa = fitted["attrs"]["popularity"]
     pop = _popularity_score(full, pa["W"], pa["b"], X)
     row["popularity_auc"] = _entity_auc(pop, real, names)
-    Wn, bn = null_fits["popularity"]
-    row["popularity_auc_shuffled"] = _entity_auc(_popularity_score(full, Wn, bn, X), real, names)
+    null_auc = np.array([_entity_auc(_popularity_score(full, *nf["popularity"], X), real, names) for nf in null_fits])
+    row.update(_null_stats("popularity_auc", row["popularity_auc"], null_auc))
+    nulls: dict[str, np.ndarray] = {"popularity_auc": null_auc}
     if ne0:
         dfp = pd.DataFrame({"category": c_idx["category"], "entity": c_idx["pair_entity"], "pop": pop, "real": real})
         per_pop = dfp[dfp["real"]].groupby(["category", "entity"])["pop"].mean()
@@ -443,13 +456,53 @@ def _transfer_row(frame, layer, li, fitted, K, null_ks, null_fits, c_idx, c_acts
     if len(pairs) and K.size:
         D = X[pairs[False].astype(int).to_numpy()] - X[pairs[True].astype(int).to_numpy()]
         row["k_capture"] = capture_ratio(D, K)
-        caps = [capture_ratio(D, k) for k in null_ks if k.size]
-        row["shuffled_k_capture_mean"] = float(np.mean(caps)) if caps else float("nan")
-        row["shuffled_k_capture_sd"] = float(np.std(caps)) if caps else float("nan")
+        caps = np.array([capture_ratio(D, k) if k.size else np.nan for k in null_ks])
+        row.update(_null_stats("k_capture", row["k_capture"], caps))
+        nulls["k_capture"] = caps
         row["random_capture_mean"], _ = random_capture(D, K.shape[1], pr.n_random_subspaces, seed)
         row["n_pairs"] = int(len(pairs))
         row["n_distinct_differences"] = int(len(np.unique(np.round(D[:, :8], 3), axis=0)))
-    return row
+    return row, nulls
+
+
+def _null_stats(name: str, obs: float, null: np.ndarray) -> dict[str, float]:
+    """Mean / SD of the shuffled-label null and the one-sided permutation p of the observed value."""
+    v = null[np.isfinite(null)]
+    if not len(v) or not np.isfinite(obs):
+        return {f"{name}_null_mean": float("nan"), f"{name}_null_sd": float("nan"), f"{name}_p": float("nan")}
+    return {f"{name}_null_mean": float(v.mean()), f"{name}_null_sd": float(v.std(ddof=1)) if len(v) > 1 else 0.0,
+            f"{name}_p": float((1 + (v >= obs).sum()) / (1 + len(v)))}
+
+
+def max_over_layers_p(obs: dict[int, float], null: dict[int, np.ndarray]) -> float:
+    """Family-wise permutation p over layers: each statistic is standardised by its own layer's null; the null of
+    the maximum is the per-shuffle maximum over layers (shuffle r is the same label permutation at every layer)."""
+    keep = [lv for lv in obs if np.isfinite(obs[lv]) and lv in null and np.isfinite(null[lv]).all()
+            and null[lv].std(ddof=1) > 0]
+    if not keep:
+        return float("nan")
+    z_obs = max((obs[lv] - null[lv].mean()) / null[lv].std(ddof=1) for lv in keep)
+    z_null = np.stack([(null[lv] - null[lv].mean()) / null[lv].std(ddof=1) for lv in keep]).max(axis=0)
+    return float((1 + (z_null >= z_obs).sum()) / (1 + len(z_null)))
+
+
+def add_familywise_p(tdf: pd.DataFrame, null_store: dict[tuple[str, int], dict[str, np.ndarray]],
+                     layers: list[int]) -> pd.DataFrame:
+    """Per frame, the max-over-layers p (layers > 0) for k_capture and popularity_auc, on every row of the frame."""
+    if not len(tdf):
+        return tdf
+    tdf = tdf.copy()
+    eligible = [lv for lv in layers if lv > 0]
+    for stat in ("k_capture", "popularity_auc"):
+        if stat not in tdf:
+            continue
+        col = f"{stat}_p_fwer"
+        tdf[col] = np.nan
+        for frame, sub in tdf.groupby("frame"):
+            obs = {int(r["layer"]): float(r[stat]) for _, r in sub.iterrows() if int(r["layer"]) in eligible}
+            null = {lv: null_store[(frame, lv)][stat] for lv in obs if stat in null_store.get((frame, lv), {})}
+            tdf.loc[tdf["frame"] == frame, col] = max_over_layers_p(obs, null)
+    return tdf
 
 
 def _binding_rows(frame, layer, li, fitted, p_idx, p_acts, heldout) -> list[dict[str, Any]]:
@@ -506,23 +559,27 @@ def readiness_warnings(mdf: pd.DataFrame, bdf: pd.DataFrame, tdf: pd.DataFrame, 
     if len(tdf) and "frame" in tdf:
         t = tdf[(tdf["frame"] == k_frame) & tdf["layer"].isin(eligible)]
         if "k_capture" in t and len(t):
-            ok = (t["k_capture"] >= CAPTURE_EXCESS_WARN * t["shuffled_k_capture_mean"]) & \
-                 (t["k_capture"] - t["shuffled_k_capture_mean"] >= CAPTURE_SD_WARN * t["shuffled_k_capture_sd"])
-            if not ok.any():
-                w.append("K capture: at no layer > 0 does K hold clearly more of the real-minus-placebo activation "
-                         "difference than a K built the same way from shuffled labels, so K cannot be shown to be "
-                         "attribute-specific (the difference may lie in generic high-variance directions); a delta_k "
-                         "from this K would not be interpretable as knowledge")
+            big = (t["k_capture"] >= CAPTURE_EXCESS_WARN * t["k_capture_null_mean"]).any()
+            fw = float(t["k_capture_p_fwer"].iloc[0]) if "k_capture_p_fwer" in t else float("nan")
+            if not (big and np.isfinite(fw) and fw < FWER_ALPHA):
+                w.append(f"K capture: K does not hold clearly more of the real-minus-placebo activation difference "
+                         f"than a K built the same way from shuffled labels (need >= {CAPTURE_EXCESS_WARN}x the null "
+                         f"mean at some layer > 0 and max-over-layers permutation p < {FWER_ALPHA}; p = {fw:.3f}), so "
+                         f"K cannot be shown to be attribute-specific; a delta_k from this K would not be "
+                         f"interpretable as knowledge")
         if "tier_within_cat_p" in t and len(t):
             sig = (t["tier_within_cat_rho"] > 0) & (t["tier_within_cat_p"] * n_layers < 0.05)
             if not sig.any():
                 w.append("real-brand transfer: the price-tier read-out does not rank real brands by catalogue tier "
                          "WITHIN categories at any layer > 0 (permutation p, Bonferroni over layers)")
         if "popularity_auc" in t and len(t):
-            if not ((t["popularity_auc"] - t["popularity_auc_shuffled"]) >= AUC_EXCESS_WARN).any():
-                w.append("familiarity: the popularity read-out separates real brands from placebos no better than a "
-                         "shuffled-label probe at any layer > 0; familiarity is then outside K and would inflate the "
-                         "identity residuals of famous brands")
+            big = ((t["popularity_auc"] - t["popularity_auc_null_mean"]) >= AUC_EXCESS_WARN).any()
+            fw = float(t["popularity_auc_p_fwer"].iloc[0]) if "popularity_auc_p_fwer" in t else float("nan")
+            if not (big and np.isfinite(fw) and fw < FWER_ALPHA):
+                w.append(f"familiarity: the popularity read-out separates real brands from placebos no better than "
+                         f"shuffled-label probes (need +{AUC_EXCESS_WARN} AUC over the null mean at some layer > 0 and "
+                         f"max-over-layers p < {FWER_ALPHA}; p = {fw:.3f}); familiarity is then outside K and would "
+                         f"inflate the identity residuals of famous brands")
     return w
 
 
@@ -551,13 +608,15 @@ def write_probe_summary(sdir: Path, model_id: str, cfg: Config, mdf, bdf, tdf, w
                   "never described, so both accuracies should be at chance (acc_vs_other > chance = context leakage).",
                   ""] + _md_table(b.reset_index())
     if len(tdf):
-        tcols = [c for c in ["frame", "layer", "k_rank", "k_capture", "shuffled_k_capture_mean", "shuffled_k_capture_sd",
-                             "random_capture_mean", "tier_within_cat_rho", "tier_within_cat_p", "popularity_auc",
-                             "popularity_auc_shuffled", "familiarity_rho_vs_ne_e0", "n_real_entities",
+        tcols = [c for c in ["frame", "layer", "k_rank", "k_capture", "k_capture_null_mean", "k_capture_null_sd",
+                             "k_capture_p", "k_capture_p_fwer", "random_capture_mean", "tier_within_cat_rho",
+                             "tier_within_cat_p", "popularity_auc", "popularity_auc_null_mean", "popularity_auc_p",
+                             "popularity_auc_p_fwer", "familiarity_rho_vs_ne_e0", "n_real_entities",
                              "n_placebo_names", "n_pairs", "n_distinct_differences"] if c in tdf]
         lines += ["", "## Transfer to real brands, familiarity and K capture (evidence-0 choice prompts)", "",
-                  "k_capture = share of ||h_real - h_placebo||^2 inside K; compare with shuffled_k_capture (same "
-                  "construction, shuffled labels). random_capture (isotropic) is shown for orientation only. "
+                  f"k_capture = share of ||h_real - h_placebo||^2 inside K; the null is {cfg.probe.n_null_k} Ks built "
+                  "the same way from shuffled labels (_p: per-layer permutation p; _p_fwer: max-over-layers p for the "
+                  "frame, layers > 0). random_capture (isotropic) is shown for orientation only. "
                   "n_distinct_differences shows how many of the n_pairs differences are distinct vectors.", ""]
         lines += _md_table(tdf[tcols])
     io.atomic_write_text(sdir / "summary.md", "\n".join(lines) + "\n")

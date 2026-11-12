@@ -118,10 +118,12 @@ def gpu_overrides() -> list[str]:
         return []
     if gib >= 120:  # H200 (141 GB)
         sizes = {"measure.max_batch_size": 128, "measure.max_batch_tokens": 65536,
-                 "extract.max_batch_size": 64, "extract.max_batch_tokens": 32768}
+                 "extract.max_batch_size": 64, "extract.max_batch_tokens": 32768,
+                 "localize.max_batch_size": 96, "localize.max_batch_tokens": 49152}
     elif gib >= 76:  # 96 GB class (e.g. G4 / RTX PRO 6000) and 80 GB A100/H100 (~79 GiB usable)
         sizes = {"measure.max_batch_size": 96, "measure.max_batch_tokens": 49152,
-                 "extract.max_batch_size": 48, "extract.max_batch_tokens": 24576}
+                 "extract.max_batch_size": 48, "extract.max_batch_tokens": 24576,
+                 "localize.max_batch_size": 64, "localize.max_batch_tokens": 32768}
     else:
         return []
     out: list[str] = []

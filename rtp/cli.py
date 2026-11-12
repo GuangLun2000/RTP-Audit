@@ -44,6 +44,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("measure", help="choice-letter scoring and name effects (M2)")
     _add_model_stage_args(p)
 
+    p = sub.add_parser("format-probe", help="quick check of how a model answers the choice question (dev sample)")
+    p.add_argument("--config", required=True)
+    p.add_argument("--model", required=True)
+    p.add_argument("--n-items", type=int, default=40, help="items to score and decode (default 40)")
+    p.add_argument("--prompt-mode", default="auto", choices=["auto", "chat", "base"])
+
     p = sub.add_parser("open-ended", help="Name / Choose / Recommend / pick measurement (M2)")
     _add_model_stage_args(p)
 
@@ -56,6 +62,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--force", action="store_true")
     p.add_argument("--prompt-mode", default="auto", choices=["auto", "chat", "base"],
                    help="must match the prompt mode used by `extract`")
+
+    p = sub.add_parser("localize", help="where the name effect is carried: full transplants by layer and site "
+                                        "(M3 readiness; dev only)")
+    p.add_argument("--config", required=True)
+    p.add_argument("--model", required=True)
+    p.add_argument("--force", action="store_true")
+    p.add_argument("--prompt-mode", default="auto", choices=["auto", "chat", "base"])
 
     p = sub.add_parser("report", help="cross-model Markdown report from finished stages")
     p.add_argument("--config", required=True)
@@ -214,6 +227,10 @@ def _dispatch(args: argparse.Namespace) -> int:
 
         run_measure(cfg, args.model, split=args.split, unseal=args.unseal, force=args.force,
                     prompt_mode=args.prompt_mode)
+    elif args.stage == "format-probe":
+        from rtp.measure.format_probe import run_format_probe
+
+        run_format_probe(cfg, args.model, n_items=args.n_items, prompt_mode=args.prompt_mode)
     elif args.stage == "open-ended":
         from rtp.measure.open_ended import run_open_ended
 
@@ -228,6 +245,10 @@ def _dispatch(args: argparse.Namespace) -> int:
         from rtp.detect.probes import run_probe
 
         run_probe(cfg, args.model, force=args.force, prompt_mode=args.prompt_mode)
+    elif args.stage == "localize":
+        from rtp.detect.localize import run_localize
+
+        run_localize(cfg, args.model, force=args.force, prompt_mode=args.prompt_mode)
     elif args.stage == "report":
         from rtp.report import run_report
 
