@@ -404,6 +404,30 @@ def manipulation_ratio(resp: list[dict[str, Any]], table: pd.DataFrame) -> float
     return float(plac[0]["per_star_drop"] / scale) if scale and np.isfinite(scale) and scale > 0 else float("nan")
 
 
+def numeric_noise(scores: pd.DataFrame, ne: pd.DataFrame, table: pd.DataFrame) -> dict[str, Any]:
+    """Numerical noise floor from the items scored twice (batched, and alone: ``s_target_solo``).
+
+    d = s_solo - s_batched. If both runs carry independent noise of sd sigma, sd(d) = sigma * sqrt(2). A pair's
+    name effect averages 4 rotations per version (variance sigma^2 / 2) and an entity's ne_e0 averages its
+    evidence-0 pairs, so its implied numerical noise is sigma / sqrt(2 * pairs). Compared with the median
+    |ne_e0| and the median se_e0 (an approximation: noise within one batch may be correlated)."""
+    if "s_target_solo" not in scores:
+        return {"n": 0}
+    d = (scores["s_target_solo"] - scores["s_target"]).dropna()
+    if d.empty:
+        return {"n": 0}
+    sigma = float(d.std(ddof=1) / np.sqrt(2)) if len(d) > 1 else float(abs(d.iloc[0]) / np.sqrt(2))
+    e0 = ne[ne["evidence_level"] == 0] if len(ne) else ne
+    pairs = float(e0.groupby(["category", "entity"]).size().median()) if len(e0) else float("nan")
+    ent = sigma / np.sqrt(2 * pairs) if pairs and np.isfinite(pairs) else float("nan")
+    med_ne = float(np.nanmedian(np.abs(table["ne_e0"]))) if "ne_e0" in table and len(table) else float("nan")
+    med_se = float(np.nanmedian(table["se_e0"])) if "se_e0" in table and len(table) else float("nan")
+    return {"n": int(len(d)), "mean_abs_diff": float(d.abs().mean()), "max_abs_diff": float(d.abs().max()),
+            "sigma_item": sigma, "pairs_per_entity_e0": pairs, "implied_entity_noise_e0": float(ent),
+            "median_abs_ne_e0": med_ne, "median_se_e0": med_se,
+            "noise_over_median_ne": float(ent / med_ne) if med_ne and np.isfinite(med_ne) else float("nan")}
+
+
 def _chance(a: pd.Series, b: pd.Series) -> float:
     """Agreement expected from the two marginal letter distributions alone (unparsed answers never match)."""
     n = len(a)
@@ -501,6 +525,7 @@ def summarize_measure(cfg: Config, model_id: str, split: str, items: list[dict[s
     est = estimator_table(scores, meta)
     est_agree = estimator_agreement(est)
     bounds = name_effect_bounds(scores, meta, level=0)
+    noise = numeric_noise(scores, ne, table)
 
     io.write_parquet(sdir / "pair_scores.parquet", pairs)
     io.write_parquet(sdir / "name_effects.parquet", ne)
@@ -513,6 +538,7 @@ def summarize_measure(cfg: Config, model_id: str, split: str, items: list[dict[s
     io.write_json(sdir / "evidence_sensitivity.json", {"rows": sens, "responds_to_ratings": responds,
                                                       "handicap_response": resp, "manipulation_ratio": ratio})
     io.write_json(sdir / "consistency.json", cons)
+    io.write_json(sdir / "numeric_noise.json", noise)
     io.write_json(sdir / "answer_format.json", {"format_shifts": shifts, "estimator_agreement": est_agree,
                                                "bounds_e0": bounds})
 
@@ -559,6 +585,15 @@ def summarize_measure(cfg: Config, model_id: str, split: str, items: list[dict[s
         lines.append(f"- **WARNING: agreement {cons['agreement']:.1%} is below "
                      f"{cfg.measure.consistency_warn_below:.0%}; the scores may not reflect what the model would "
                      f"answer.**")
+    if noise.get("n"):
+        lines += ["", "## Numerical noise floor (same items scored batched and alone)", "",
+                  f"- {noise['n']} items: |s_solo - s_batched| mean {noise['mean_abs_diff']:.4f}, max "
+                  f"{noise['max_abs_diff']:.4f} logits; implied per-item noise sd {noise['sigma_item']:.4f}.",
+                  f"- implied numerical noise of an entity's ne_e0 ({_fmt(noise['pairs_per_entity_e0'])} pairs): "
+                  f"{noise['implied_entity_noise_e0']:.4f} logits = {_pct(noise['noise_over_median_ne'])} of the "
+                  f"median |ne_e0| ({_fmt(noise['median_abs_ne_e0'])}); median se_e0 {_fmt(noise['median_se_e0'])}. "
+                  "bfloat16 (spec §3) makes scores depend slightly on batch composition; float32 would remove most "
+                  "of it (a PI decision)."]
     lines += ["", "## Estimators and bounds", "",
               "Entity name effects under O5 (primary), O3 (free position only, renormalised over immediate "
               "answers) and O4 (forced position only). Spearman correlation across entities:", ""]
@@ -621,4 +656,6 @@ def summarize_measure(cfg: Config, model_id: str, split: str, items: list[dict[s
             "format_shifts": len(shifts), "format_warning": bool(shifts),
             "manipulation_ratio": rnd(ratio), "manipulation_warning": manip_warn,
             "bounds_e0": bounds, "estimator_agreement": est_agree,
+            "numeric_noise": {k: (round(v, 5) if isinstance(v, float) and np.isfinite(v) else v)
+                              for k, v in noise.items()},
             "elapsed_s": round(elapsed, 1)}

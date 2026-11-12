@@ -172,7 +172,7 @@ def test_patching_once_prefix_only_and_valid_indices():
 
 # --------------------------------------------------------------------------- integration
 @pytest.mark.integration
-def test_identity_transplant_reproduces_source_logits(smoke_lm):
+def test_identity_transplant_reproduces_source_logits(smoke_lm_fp32):
     """Spec §10: transplanting EVERY position of the source run at layer 0 into the base run gives the
     source logits (and the same at a middle layer)."""
     import torch
@@ -180,26 +180,29 @@ def test_identity_transplant_reproduces_source_logits(smoke_lm):
     from rtp.models import encode, format_chat
     from rtp.patching import patched
 
+    smoke_lm = smoke_lm_fp32
     tok = smoke_lm.tokenizer
+    dev = smoke_lm.device  # GPU-safe: inputs on the model's device
     src = encode(tok, format_chat(tok, "Which running shoe brand is best: Nike or Asics?"), True)
     base = list(src)
     for k in range(5, 10):  # a base run that differs from the source in several tokens
         base[k] = (base[k] + 17) % len(tok)
     with torch.inference_mode():
-        out = smoke_lm.model(input_ids=torch.tensor([src]), output_hidden_states=True)
+        out = smoke_lm.model(input_ids=torch.tensor([src], device=dev), output_hidden_states=True)
         ref = out.logits[0].float()
         for layer in (0, 12):
             h = out.hidden_states[layer][0]
             patches = {layer: [(0, p, h[p]) for p in range(len(src))]}
             with patched(smoke_lm.model, patches):
-                got = smoke_lm.model(input_ids=torch.tensor([base])).logits[0].float()
+                got = smoke_lm.model(input_ids=torch.tensor([base], device=dev)).logits[0].float()
             assert torch.allclose(got, ref, atol=1e-4), layer
-        clean = smoke_lm.model(input_ids=torch.tensor([base])).logits[0].float()
+        clean = smoke_lm.model(input_ids=torch.tensor([base], device=dev)).logits[0].float()
     assert not torch.allclose(clean, ref, atol=1e-2)  # the hooks are removed after the context
 
 
 @pytest.mark.integration
-def test_self_transplant_is_a_no_op_and_stage_runs(smoke_lm, work_dir, monkeypatch):
+def test_self_transplant_is_a_no_op_and_stage_runs(smoke_lm_fp32, work_dir, monkeypatch):
+    smoke_lm = smoke_lm_fp32  # exact comparison: float32 on any device
     from rtp import io
     from rtp.data.build import build_data, load_choice_items
     from rtp.detect.localize import VERSIONS, prepare_unit, run_localize, score_rows

@@ -316,12 +316,13 @@ def _brute_force(lm, prefix, paths, art_ids):
         n = len(prefix)
         logmass[p] = float(sum(lp[n - 1 + k, t] for k, t in enumerate(p)))
         if p in paths.a_letter:
-            article[p] = float(lp[-1, art_ids].exp().sum())
+            article[p] = float(lp[-1, art_ids.to(lp.device)].exp().sum())
     return logmass, article
 
 
 @pytest.mark.integration
-def test_answer_distributions_match_brute_force(smoke_lm, monkeypatch):
+def test_answer_distributions_match_brute_force(smoke_lm_fp32, monkeypatch):
+    smoke_lm = smoke_lm_fp32  # exact comparison: float32 on any device
     import torch
 
     from rtp.measure.answers import answer_distributions, article_ids
@@ -372,3 +373,19 @@ def test_format_probe_on_smoke_model(smoke_lm, work_dir, monkeypatch):
     res = io.read_json(out / "format_probe.json")
     assert res["n_items"] == 8 and sum(res["modes"].values()) == 8 and 0 < res["c_forced"] <= 1.0001
     assert "| e | version |" in (out / "summary.md").read_text()
+
+
+def test_numeric_noise_floor():
+    from rtp.measure.name_effect import numeric_noise
+
+    rng = np.random.default_rng(0)
+    scores = pd.DataFrame({"s_target": rng.normal(size=2000)})
+    sigma = 0.1  # both runs carry independent noise of sd sigma -> difference sd sigma * sqrt(2)
+    scores["s_target_solo"] = np.where(np.arange(2000) < 1000,
+                                       scores["s_target"] + rng.normal(0, sigma * np.sqrt(2), 2000), np.nan)
+    ne = pd.DataFrame({"category": "c", "entity": np.repeat([f"e{i}" for i in range(4)], 24), "evidence_level": 0})
+    table = pd.DataFrame({"ne_e0": [0.5, -1.0, 0.8, 1.2], "se_e0": [0.1] * 4})
+    n = numeric_noise(scores, ne, table)
+    assert n["n"] == 1000 and n["sigma_item"] == pytest.approx(sigma, rel=0.1)
+    assert n["implied_entity_noise_e0"] == pytest.approx(n["sigma_item"] / np.sqrt(48))
+    assert numeric_noise(scores.drop(columns="s_target_solo"), ne, table) == {"n": 0}
