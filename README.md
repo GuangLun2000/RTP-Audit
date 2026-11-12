@@ -120,7 +120,9 @@ Outputs in `runs/<config>/<model_slug>/measure/`:
   argmax_forced, s_target_free, s_target_forced, s_target_lo, s_target_hi, c_free, c_forced, name_share_*,
   leak_*, article_free, pruned_*, gen_text, gen_mode, s_target_solo`. `s_target_solo` (2% sample) is the same
   item scored alone: the difference from `s_target` is the numerical noise floor of bfloat16 batching, reported in
-  the summary and `numeric_noise.json` next to the size of the name effects.
+  the summary and `numeric_noise.json` next to the size of the name effects. `gen_refusal` flags checked free
+  answers that open with a refusal ("I'm sorry, but I can't ..."); their rate per evidence level and version is in
+  `refusals_by_level.parquet` and the summary.
 - `pair_scores.parquet`, `name_effects.parquet`.
 - `entity_evidence.parquet`: entity × evidence-level name effects (SEs over placebo substitutes), plus the residual of the
   robust regression through the origin of evidence 4 on evidence 0.

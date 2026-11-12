@@ -29,6 +29,10 @@ def _env(extra: dict[str, str] | None = None) -> dict[str, str]:
     env.setdefault("RTP_PROGRESS", "log")  # one line per ~10% with ETA, no carriage-return bars
     env.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")  # download bars would print one line per refresh
     env.setdefault("TQDM_DISABLE", "1")
+    from rtp.cli import TORCH_ONLY_ENV  # no TensorFlow/JAX in stages or pytest (start-up time, misleading GPU logs)
+
+    for k, v in TORCH_ONLY_ENV.items():
+        env.setdefault(k, v)
     env.update(extra or {})
     return env
 
@@ -38,15 +42,15 @@ def stream(cmd: list[str], env: dict[str, str] | None = None, label: str | None 
     label = label or " ".join(cmd)
     t0 = time.time()
     print(f"\n▶ {time.strftime('%H:%M:%S')}  {label}", flush=True)
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
-                            env=_env(env))
     n_warn = 0
-    assert proc.stdout is not None
-    for line in proc.stdout:
-        mark = next((m for k, m in _MARK.items() if k in line), "")
-        n_warn += mark == _MARK["WARNING"]
-        print(mark + line, end="", flush=True)
-    rc = proc.wait()
+    with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+                          env=_env(env)) as proc:  # the context manager closes the pipe
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            mark = next((m for k, m in _MARK.items() if k in line), "")
+            n_warn += mark == _MARK["WARNING"]
+            print(mark + line, end="", flush=True)
+        rc = proc.wait()
     secs = time.time() - t0
     status = "✅ ok" if rc == 0 else f"❌ FAILED (exit {rc})"
     print(f"{status}  {label}  [{secs:.0f}s, {n_warn} warnings]", flush=True)

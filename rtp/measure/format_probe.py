@@ -68,10 +68,13 @@ def run_format_probe(cfg: Config, model_id: str, n_items: int = 40, prompt_mode:
     free = tok.decode(render_inputs(lm, [items[0]["prompt"]], prefill=False)[0])
     forced = tok.decode(render_inputs(lm, [items[0]["prompt"]], prefill=True)[0])
     cons = consistency(df)
-    by_level = df.groupby(["evidence_level", "version"])[["c_free", "c_forced", "name_share_free", "leak_free"]].mean()
+    df["refusal"] = df["gen_refusal"].astype(bool)
+    by_level = df.groupby(["evidence_level", "version"])[["c_free", "c_forced", "name_share_free", "leak_free",
+                                                          "refusal"]].mean()
     modes = df["gen_mode"].value_counts().to_dict()
     res = {"model_id": model_id, "n_items": int(len(df)), "c_free": float(df["c_free"].mean()),
            "article_free": float(df["article_free"].mean()),
+           "refusals": int(df["gen_refusal"].astype(bool).sum()),
            "noise_mean_abs_diff": float((df["s_target_solo"] - df["s_target"]).abs().mean()),
            "noise_max_abs_diff": float((df["s_target_solo"] - df["s_target"]).abs().max()),
            "c_forced": float(df["c_forced"].mean()), "name_share_free": float(np.nanmean(df["name_share_free"])),
@@ -84,6 +87,8 @@ def run_format_probe(cfg: Config, model_id: str, n_items: int = 40, prompt_mode:
              f"- mean coverage: free {res['c_free']:.3f}, forced {res['c_forced']:.3f}; name share (free) "
              f"{res['name_share_free']:.3f}; answer modes {res['modes']}; mass of \"A\" + article word removed "
              f"from option A (free) {res['article_free']:.4f}",
+             f"- free answers that open with a refusal: {res['refusals']} of {len(df)} (O5 imputes their mass from the "
+             f"forced position)",
              f"- numerical noise floor: the same items scored batched vs alone differ by {res['noise_mean_abs_diff']:.4f} "
              f"logits on average (max {res['noise_max_abs_diff']:.4f})",
              f"- free answer vs O5 argmax: {_pct(cons['agreement'])} (chance {_pct(cons['chance'])}); immediate vs "
