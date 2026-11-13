@@ -246,6 +246,17 @@ def parse_final_answer(text: str | None, options: Sequence[dict[str, Any]],
     return mentioned.pop() if len(mentioned) == 1 else None
 
 
+# A free answer that OPENS by declining to choose ("I'm sorry, but I can't provide a recommendation", "As an AI, I
+# don't have personal preferences"). Tulu-3-8B-SFT does this often at evidence 0. O5 treats such mass like any
+# deferred answer (imputed from the forced position), so the refusal rate is reported per level and version.
+_REFUSAL_RE = re.compile(r"(?i)^[\s\"'*]*(?:i'?m\s+sorry|i\s+am\s+sorry|sorry,|i\s+(?:can(?:no|')t|can\s+not|am\s+unable|"
+                         r"won't|do\s+not\s+have\s+personal|don't\s+have\s+personal)|as\s+an\s+ai\b|unfortunately,?\s+i\b)")
+
+
+def is_refusal(text: str | None) -> bool:
+    return bool(text) and _REFUSAL_RE.match(_ascii(text).replace("\u2019", "'")) is not None
+
+
 def item_answer_paths(tokenizer: Any, items: Sequence[dict[str, Any]], letter_ids: dict[str, list[int]]):
     """Answer paths per item: displayed option names, plus the target slot's ABSENT identity as the leak class."""
     from rtp.measure.answers import build_item_paths
@@ -315,6 +326,7 @@ def score_items(lm: LoadedModel, items: Sequence[dict[str, Any]], letter_ids: di
                 df.at[i, "gen_text"] = t[0]
                 df.at[i, "gen_letter"] = parse_answer(t[0], opts, case_sensitive)
                 df.at[i, "gen_mode"] = "immediate"
+        df["gen_refusal"] = df["gen_text"].map(lambda x: is_refusal(x) if isinstance(x, str) else None).astype("object")
     return df
 
 

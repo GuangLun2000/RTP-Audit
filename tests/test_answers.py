@@ -176,6 +176,27 @@ def test_parser_regressions():
     assert parse_final_answer("D offers a sharp picture and good value", o3) is None  # without the flags
 
 
+def test_refusals_are_detected_counted_and_left_out_of_one_agreement():
+    from rtp.measure.choice import is_refusal
+    from rtp.measure.name_effect import refusal_by_level
+
+    assert is_refusal("I'm sorry, but I can't provide a recommendation on which smartphone")
+    assert is_refusal("As an AI, I don't have personal opinions or preferences")
+    assert not is_refusal("Given the information provided, C") and not is_refusal("I would choose B")
+    s = pd.DataFrame({"item_id": list("abcd"), "gen_text": ["I'm sorry, but no", "C", "D", None],
+                      "gen_mode": ["deferred", "immediate", "immediate", None], "gen_letter": [None, "C", "A", None],
+                      "gen_refusal": [True, False, False, None], "argmax_letter": ["B", "C", "D", "A"],
+                      "argmax_free": ["B", "C", "D", "A"], "argmax_forced": ["B", "C", "D", "A"]})
+    c = consistency(s)
+    assert c["n_refusal"] == 1 and c["refusal_rate"] == pytest.approx(1 / 3)
+    assert c["agreement"] == pytest.approx(1 / 3) and c["agreement_excl_refusals"] == pytest.approx(0.5)
+    meta = pd.DataFrame({"item_id": list("abcd"), "evidence_level": [0, 0, 4, 4],
+                         "target_is_placebo": [False, True, False, True]})
+    r = refusal_by_level(s, meta).set_index(["evidence_level", "version"])
+    assert r.loc[(0, "real"), "refusal_rate"] == 1.0 and r.loc[(0, "placebo"), "refusal_rate"] == 0.0
+    assert (4, "placebo") not in r.index  # unchecked items are not counted
+
+
 def test_consistency_modes_and_chance():
     s = pd.DataFrame({"gen_text": ["x"] * 6 + [None],
                       "gen_mode": ["immediate"] * 3 + ["deferred"] * 3 + [None],
@@ -210,7 +231,11 @@ def test_format_stability_flags_shift():
     cov = pd.DataFrame({"evidence_level": [0, 4, 0, 4], "version": ["real", "real", "placebo", "placebo"],
                         "name_share_free": [0.1, 0.5, 0.1, 0.15], "c_free": [0.9, 0.85, 0.9, 0.9]})
     flags = format_stability(cov)
-    assert len(flags) == 1 and flags[0]["version"] == "real" and flags[0]["column"] == "name_share_free"
+    kinds = {(f["kind"], f["evidence_level"], f["column"]) for f in flags}
+    # real moves away from evidence 0 (level shift) AND differs from placebo at evidence 4 (version gap)
+    assert kinds == {("level shift", 4, "name_share_free"), ("version gap", 4, "name_share_free")}
+    gap = next(f for f in flags if f["kind"] == "version gap")
+    assert gap["shift"] == pytest.approx(0.35) and gap["version"] == "real - placebo"
 
 
 def test_name_effect_bounds_contain_estimate():

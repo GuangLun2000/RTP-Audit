@@ -282,8 +282,10 @@ def coverage_by_level(scores: pd.DataFrame, meta: pd.DataFrame) -> pd.DataFrame:
 
 
 def format_stability(cov: pd.DataFrame, max_shift: float = FORMAT_SHIFT_WARN) -> list[dict[str, Any]]:
-    """Levels whose free-position answer FORMAT differs from evidence 0 (name share or coverage shifted by
-    more than ``max_shift``): there the ladder compares readouts of different answer formats."""
+    """Where the free-position answer FORMAT (coverage or name share) differs by more than ``max_shift``:
+    ``level shift`` = an evidence level vs evidence 0 within one version (the ladder then compares readouts of
+    different formats); ``version gap`` = real vs placebo version at the same level (the name effect then also
+    changes how much of the score O5 imputes from the forced position, so part of it is a format effect)."""
     out = []
     for version, sub in cov.groupby("version"):
         base = sub[sub["evidence_level"] == 0]
@@ -293,9 +295,30 @@ def format_stability(cov: pd.DataFrame, max_shift: float = FORMAT_SHIFT_WARN) ->
             for col in ("name_share_free", "c_free"):
                 d = float(r[col] - base[col].iloc[0])
                 if np.isfinite(d) and abs(d) > max_shift:
-                    out.append({"version": version, "evidence_level": int(r["evidence_level"]), "column": col,
-                                "e0": float(base[col].iloc[0]), "value": float(r[col]), "shift": d})
+                    out.append({"kind": "level shift", "version": version, "evidence_level": int(r["evidence_level"]),
+                                "column": col, "reference": float(base[col].iloc[0]), "value": float(r[col]), "shift": d})
+    piv = cov.pivot_table(index="evidence_level", columns="version", values=["c_free", "name_share_free"])
+    for lvl in piv.index:
+        for col in ("c_free", "name_share_free"):
+            if (col, "real") in piv and (col, "placebo") in piv:
+                ref, val = float(piv.loc[lvl, (col, "placebo")]), float(piv.loc[lvl, (col, "real")])
+                d = val - ref
+                if np.isfinite(d) and abs(d) > max_shift:
+                    out.append({"kind": "version gap", "version": "real - placebo", "evidence_level": int(lvl),
+                                "column": col, "reference": ref, "value": val, "shift": d})
     return out
+
+
+def refusal_by_level(scores: pd.DataFrame, meta: pd.DataFrame) -> pd.DataFrame:
+    """Share of the checked free answers that open with a refusal, per (evidence level, version)."""
+    if "gen_refusal" not in scores:
+        return pd.DataFrame()
+    df = _with_meta(scores[scores["gen_text"].notna()], meta, ["evidence_level", "target_is_placebo"])
+    if df.empty:
+        return pd.DataFrame()
+    df["gen_refusal"] = df["gen_refusal"].astype(bool)
+    return (df.groupby(["evidence_level", "version"]).agg(n_checked=("gen_refusal", "size"),
+                                                          refusal_rate=("gen_refusal", "mean")).reset_index())
 
 
 def channel_by_entity(scores: pd.DataFrame, meta: pd.DataFrame) -> pd.DataFrame:
@@ -442,7 +465,8 @@ def consistency(scores: pd.DataFrame) -> dict[str, Any]:
 
     Overall agreement is against the primary (O5) argmax; unparsed answers count as disagreement. Per mode:
     immediate answers vs the free-position argmax (O3), deferred answers vs the forced-position argmax (O4,
-    a direct test of the O5 imputation). Each comes with its chance level from the marginal frequencies."""
+    a direct test of the O5 imputation). Each comes with its chance level from the marginal frequencies. Answers
+    that open with a refusal are counted (``refusal_rate``) and an agreement without them is reported too."""
     chk = scores[scores["gen_text"].notna()]
     n = len(chk)
     out: dict[str, Any] = {"n_checked": int(n), "agreement": float("nan"), "chance": float("nan"), "n_unparsed": 0}
@@ -450,6 +474,12 @@ def consistency(scores: pd.DataFrame) -> dict[str, Any]:
         return out
     out.update(agreement=float((chk["gen_letter"] == chk["argmax_letter"]).mean()),
                chance=_chance(chk["gen_letter"], chk["argmax_letter"]), n_unparsed=int(chk["gen_letter"].isna().sum()))
+    if "gen_refusal" in chk:
+        ref = chk["gen_refusal"].astype(bool)
+        out.update(n_refusal=int(ref.sum()), refusal_rate=float(ref.mean()))
+        rest = chk[~ref]
+        if len(rest):  # the spec number counts refusals as disagreements; this one leaves them out
+            out["agreement_excl_refusals"] = float((rest["gen_letter"] == rest["argmax_letter"]).mean())
     if "gen_mode" in chk:
         for mode, ref in (("immediate", "argmax_free"), ("deferred", "argmax_forced")):
             sub = chk[chk["gen_mode"] == mode]
@@ -521,6 +551,7 @@ def summarize_measure(cfg: Config, model_id: str, split: str, items: list[dict[s
     ratio = manipulation_ratio(resp, table)
     cov = coverage_by_level(scores, meta)
     shifts = format_stability(cov)
+    refusals = refusal_by_level(scores, meta)
     chan = channel_by_entity(scores, meta)
     est = estimator_table(scores, meta)
     est_agree = estimator_agreement(est)
@@ -538,6 +569,8 @@ def summarize_measure(cfg: Config, model_id: str, split: str, items: list[dict[s
     io.write_json(sdir / "evidence_sensitivity.json", {"rows": sens, "responds_to_ratings": responds,
                                                       "handicap_response": resp, "manipulation_ratio": ratio})
     io.write_json(sdir / "consistency.json", cons)
+    if len(refusals):
+        io.write_parquet(sdir / "refusals_by_level.parquet", refusals)
     io.write_json(sdir / "numeric_noise.json", noise)
     io.write_json(sdir / "answer_format.json", {"format_shifts": shifts, "estimator_agreement": est_agree,
                                                "bounds_e0": bounds})
@@ -566,8 +599,9 @@ def summarize_measure(cfg: Config, model_id: str, split: str, items: list[dict[s
                      f"defers the answer, so O5 relies on the forced readout for that share; compare O3/O4 and the "
                      f"bounds below.")
     if shifts:
-        lines.append(f"- **WARNING: the free-position answer format changes with the evidence level (shift > "
-                     f"{FORMAT_SHIFT_WARN} vs evidence 0); the ladder then compares different readouts:**")
+        lines.append(f"- **WARNING: the free-position answer format differs by more than {FORMAT_SHIFT_WARN} (level shift: "
+                     f"vs evidence 0, the ladder then compares different readouts; version gap: real vs placebo at one "
+                     f"level, part of the name effect is then a format effect):**")
         lines += [""] + _md_table(pd.DataFrame(shifts))
     lines += ["", "## Consistency check (spec §7.1: free greedy answer vs the scored argmax)", "",
               f"- checked {cons['n_checked']} items ({cfg.measure.gen_check_fraction:.0%} sample), generated from the "
@@ -581,6 +615,13 @@ def summarize_measure(cfg: Config, model_id: str, split: str, items: list[dict[s
               f"{_pct(cons.get('agreement_deferred'))} (chance {_pct(cons.get('chance_deferred'))}; unparsed "
               f"{cons.get('n_unparsed_deferred', 0)}). This tests the O5 imputation (deferred answer = committed "
               f"answer after \"Answer:\")."]
+    if "refusal_rate" in cons:
+        lines.append(f"- answers that open with a refusal (\"I'm sorry, but I can't ...\", \"As an AI ...\"): "
+                     f"{cons['n_refusal']} of {cons['n_checked']} ({_pct(cons['refusal_rate'])}); agreement without them "
+                     f"{_pct(cons.get('agreement_excl_refusals'))}. O5 imputes refusal mass from the forced position "
+                     f"(the answer the model gives when made to choose).")
+        if len(refusals):
+            lines += [""] + _md_table(refusals)
     if warn:
         lines.append(f"- **WARNING: agreement {cons['agreement']:.1%} is below "
                      f"{cfg.measure.consistency_warn_below:.0%}; the scores may not reflect what the model would "
@@ -654,6 +695,7 @@ def summarize_measure(cfg: Config, model_id: str, split: str, items: list[dict[s
             "ladder_variants": fits, "responds_to_ratings": responds,
             "c_free": rnd(c_free), "c_forced": rnd(c_forced), "coverage_warning": bool(cov_warn),
             "format_shifts": len(shifts), "format_warning": bool(shifts),
+            "refusal_rate": cons.get("refusal_rate"),
             "manipulation_ratio": rnd(ratio), "manipulation_warning": manip_warn,
             "bounds_e0": bounds, "estimator_agreement": est_agree,
             "numeric_noise": {k: (round(v, 5) if isinstance(v, float) and np.isfinite(v) else v)

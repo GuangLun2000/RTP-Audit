@@ -230,3 +230,18 @@ def test_notebook_bootstraps_from_github_and_is_versioned():
     link = f"https://colab.research.google.com/github/{owner_repo}/blob/{pin}/colab/run_pilot.ipynb"
     assert src.count(link) >= 2  # the "Open in Colab" link (cell 0) and cell 2's outdated-copy message
     assert "❌" in "".join(nb["cells"][2]["source"]) and "✅ code ready" in "".join(nb["cells"][2]["source"])
+
+
+def test_stage_processes_do_not_load_tensorflow():
+    """Colab preinstalls TensorFlow; its import printed "Could not find cuda drivers ... GPU will not be used" in
+    every stage (TensorFlow's message, not PyTorch's) and cost start-up time."""
+    import subprocess
+    import sys
+
+    from rtp.notebook import _env
+
+    assert _env()["USE_TF"] == "0" and _env({"USE_TF": "1"})["USE_TF"] == "1"
+    env = {k: v for k, v in _env().items() if k not in ("USE_TF", "USE_FLAX", "TF_CPP_MIN_LOG_LEVEL")}
+    out = subprocess.run([sys.executable, "-c", "import os, rtp.cli; print(os.environ['USE_TF'], os.environ['USE_FLAX'])"],
+                         capture_output=True, text=True, env=env, check=True).stdout.split()
+    assert out == ["0", "0"]

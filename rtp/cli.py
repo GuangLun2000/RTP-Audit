@@ -4,7 +4,15 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
+
+# PyTorch only. Colab preinstalls TensorFlow and JAX, which transformers/datasets would otherwise import on first use:
+# seconds of start-up per stage, and TensorFlow log lines such as "Could not find cuda drivers on your machine, GPU
+# will not be used" that look like a GPU problem but are not PyTorch's. setdefault: an explicit setting still wins.
+TORCH_ONLY_ENV = {"USE_TF": "0", "USE_FLAX": "0", "USE_TORCH": "1", "TF_CPP_MIN_LOG_LEVEL": "3"}
+for _k, _v in TORCH_ONLY_ENV.items():
+    os.environ.setdefault(_k, _v)
 
 from rtp.log import setup_logging
 
