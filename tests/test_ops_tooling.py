@@ -90,7 +90,7 @@ def test_doctor_runs_without_hub(work_dir, tmp_path, capsys):
     assert (work_dir / "runs" / "ops" / "doctor.json").exists()
 
 
-def test_notebook_stream_and_history(capsys):
+def test_notebook_stream_and_history(capsys, work_dir):
     from rtp import notebook as nb
 
     nb.HISTORY.clear()
@@ -101,6 +101,17 @@ def test_notebook_stream_and_history(capsys):
     with pytest.raises(RuntimeError):
         nb.run("not-a-stage", strict=True)
     assert nb.gpu_overrides() == [] or nb.gpu_overrides()[0] == "--set"
+    assert "not-a-stage" in (work_dir / "notebook_history.jsonl").read_text()  # the test's own work dir
+
+
+def test_notebook_pytest_runs_in_a_throwaway_work_dir(monkeypatch, tmp_path):
+    """Regression: the PI's session history on Drive listed the test suite's own failing commands."""
+    from rtp import notebook as nb
+
+    monkeypatch.setenv("RTP_WORK_DIR", str(tmp_path / "real"))
+    env = nb._pytest_env()
+    assert env["RTP_WORK_DIR"] != str(tmp_path / "real") and "rtp-pytest-" in env["RTP_WORK_DIR"]
+    assert env["RTP_REQUIRE_INTEGRATION"] == "1" and "RTP_REQUIRE_INTEGRATION" not in nb._pytest_env(False)
 
 
 def test_progress_log_mode(monkeypatch, caplog):

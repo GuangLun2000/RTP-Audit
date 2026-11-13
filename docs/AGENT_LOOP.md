@@ -18,7 +18,7 @@ has a tool built for it.
 
 ## 1. Run (PI, on Colab)
 
-Open `colab/run_pilot.ipynb` straight from GitHub ([Open in Colab](https://colab.research.google.com/github/GuangLun2000/RTP-Audit/blob/claude/rtp-audit-m0-m2-824c69/colab/run_pilot.ipynb)), so the newest pushed notebook is the one
+Open `colab/run_pilot.ipynb` straight from GitHub ([Open in Colab](https://colab.research.google.com/github/GuangLun2000/RTP-Audit/blob/main/colab/run_pilot.ipynb)), so the newest pushed notebook is the one
 that runs; do not keep a copy on Drive. Settings are in cell 1 (`REPO_URL`, `PIN` = branch or commit, `USE_DRIVE`).
 Cell 2 clones the code from GitHub, updates a pinned branch to its newest push, installs it, refuses a changed torch,
 warns when the open notebook is older than the repo's (`NOTEBOOK_REV`), and stops with ❌ at the first failing step.

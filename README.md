@@ -284,7 +284,7 @@ error (the message says which).
 
 ## Colab
 
-Open the notebook straight from GitHub: [Open in Colab](https://colab.research.google.com/github/GuangLun2000/RTP-Audit/blob/claude/rtp-audit-m0-m2-824c69/colab/run_pilot.ipynb). Cell 1 holds the settings (`REPO_URL`, `PIN`,
+Open the notebook straight from GitHub: [Open in Colab](https://colab.research.google.com/github/GuangLun2000/RTP-Audit/blob/main/colab/run_pilot.ipynb). Cell 1 holds the settings (`REPO_URL`, `PIN`,
 `USE_DRIVE`); Drive is used only for results.
 
 `colab/run_pilot.ipynb` contains the spec §13 steps:

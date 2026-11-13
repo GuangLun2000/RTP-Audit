@@ -83,9 +83,20 @@ def run(*args: str, strict: bool = False, env: dict[str, str] | None = None) -> 
     return rc
 
 
+def _pytest_env(require_integration: bool = True) -> dict[str, str]:
+    """Environment for the test run: a throw-away RTP_WORK_DIR, so tests never write into the real results or
+    the session history (tests of the notebook helpers record commands; they used to land in the PI's history)."""
+    import tempfile
+
+    env = {"RTP_WORK_DIR": tempfile.mkdtemp(prefix="rtp-pytest-")}
+    if require_integration:
+        env["RTP_REQUIRE_INTEGRATION"] = "1"
+    return env
+
+
 def pytest(config: str | None = None, require_integration: bool = True) -> int:
-    """Run the test suite and save its output where ``feedback`` picks it up."""
-    env = {"RTP_REQUIRE_INTEGRATION": "1"} if require_integration else {}
+    """Run the test suite (in a throw-away work dir) and save its output where ``feedback`` picks it up."""
+    env = _pytest_env(require_integration)
     cmd = [sys.executable, "-m", "pytest", "-q", "-rs", "-p", "no:cacheprovider"]
     out_path = _run_dir(config) / "pytest_last.txt" if config else None
     t0 = time.time()
