@@ -60,7 +60,7 @@ Rules that hold for every cycle:
 
 ## Log
 
-No cycle has run yet. Entry template:
+Entry template:
 
 ```
 ### C0 (date, bundle feedback_<UTC>.md, commit <hash>)
@@ -71,3 +71,37 @@ No cycle has run yet. Entry template:
 - Change (instrument version, DECISIONS.md line, code):
 - Next cycle:
 ```
+
+### C0 (2026-11-19, bundle feedback_20261119T223714Z.md, commit 6d908c4)
+- Question: does the forced letter readout work on the Tulu 3 development models, are the evidence ladders
+  monotone and long enough to bracket the brands' name effects, and what does a ladder pass cost?
+- Result (develop phase, exploratory, no noise band yet; ladder version 1, core tier, Tulu 3 SFT and DPO):
+  - Readout check FAILED by its rule: mean letter mass at the forced position 0.675 (SFT) and 0.625 (DPO)
+    against 0.9. The rule is not scale-free: the same SFT model with all logits doubled reads 0.874 while its
+    decoded answers and all 1188 levels are unchanged. The letter readout and the letters + names readout agree
+    (correlation 0.997 / 0.999, median gap 0.06 / 0.05 logits). Where the other 27-36% of the probability goes
+    was not stored.
+  - Ladders: monotone, but not a graded ruler. The first step already gives 47-58% (rating, 0.1 stars), 74-83%
+    (price, 5%) and 92-96% (reviews, 2x) of the response at the top step, and 100% of the 198 brands lie below
+    the first step in every cell. The reported level is therefore the ratio name effect / response at the
+    first step (median 0.04-0.09 with a tied attribute shown, 0.35-0.56 for a bare name), times the size of
+    that step. The response below the first step was never measured. The ladder check passed because it only
+    guards the top of the ladder.
+  - Fictional anchors FAILED (SD ratio 0.584 / 0.563 against 0.5). With a tied attribute shown the real name
+    effects shrink to a median of 0.11-0.35 logits (bare name: 0.84 / 2.02), so the ratio fails where names
+    barely matter. No fictional name pulls as hard as a typical real brand (median ratio 0.11 / 0.13).
+  - SFT to DPO: c = 2.27 [2.22, 2.33] price, 2.23 [2.19, 2.28] rating, 2.12 [2.09, 2.16] reviews. The curves
+    changed shape: the first-step response grew x2.48 / 2.46 / 2.12, the rise beyond it about x1.5. Bare-name
+    effects grew x2.53 [2.42, 2.64], the median position bias x1.70, the printed fictional pulls about x3.
+    T1 for bare names is +0.10 to +0.17 against c and +0.02 to +0.03 against the first step (price, rating):
+    its sign depends on which contrast is called the scale.
+  - Pure-scale identity on the 8B model: multipliers 2 on all three curves, largest level change 0.
+  - Open question, SFT: N_eff 5.14 (name) and 4.29 (recommend); sampled N_eff 4.51 at T = 1, 2.25 at T = 0.5.
+- Budget: predicted 41 min, actual 15 min; calibration k = 0.38. GPU time does not limit instrument iteration.
+- Decision (PI): pending. Proposed: do not run C1 on the unchanged ext tier as a decision cycle (one attribute
+  differs there too, so the same curve shape is expected); run a short probe cycle first.
+- Change (instrument version, DECISIONS.md line, code): no instrument change yet. Operations fixes in 72b1fae
+  (peft / torchao on Colab, full results disk is a doctor FAIL, bundle download cell).
+- Next cycle: proposed probe C0b on the two development models: store the non-letter tokens at the forced
+  position; anchors at smaller steps and on a trade-off grid (two attributes in opposite directions); the ext
+  anchors unchanged as a prediction test; the open question on DPO.
