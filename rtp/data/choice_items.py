@@ -19,7 +19,8 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from rtp.config import HANDICAP_MIN_EVIDENCE, Config
+from rtp.config import Config
+from rtp.data.constants import HANDICAP_MIN_EVIDENCE
 from rtp.data.cards import (OPTIONS_PER_ITEM, RangeCardSampler, render_card, render_option_line, sample_pair_cards,
                             visible_fields)
 from rtp.data.catalogue import CategorySeeds, indefinite_article

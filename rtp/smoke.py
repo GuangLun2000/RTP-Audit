@@ -1,8 +1,13 @@
-"""``python -m rtp.cli smoke``: small end-to-end run on the smoke model.
+"""``python -m rtp.cli smoke``: small end-to-end run of instrument v2 on the smoke model.
 
-Steps: M0 load + one forward pass -> M1 build data -> seal check -> M2 measure ->
-M2 open-ended -> M3 extract -> M3 probe -> M3 localize -> report. Starts from a clean ``runs/<config name>/``
-unless ``--resume``.
+Steps: load + one forward pass -> build data (legacy and ladder items) -> seal and determinism checks ->
+one CYCLE (rtp.cycle): the ladder readout on the smoke model and on its pure-scale variant ``@scale=2``,
+the open-set stage, the CPU analysis and the scorecard -> the scale identity: the variant's letter-logit
+differences are exactly twice the model's, so the scale multiplier must be 2 and every preference level
+unchanged. Starts from a clean ``runs/<config name>/`` unless ``--resume``.
+
+The legacy four-option stages and the frozen white-box stages are not part of the smoke run; their own
+tests cover them.
 """
 
 from __future__ import annotations
@@ -18,8 +23,10 @@ from rtp.paths import model_slug, run_dir, work_dir
 
 log = logging.getLogger(__name__)
 
-SMOKE_BUDGET_SECONDS = 600  # spec §6 M2: smoke end-to-end within 10 minutes (on GPU)
+SMOKE_BUDGET_SECONDS = 600  # smoke end-to-end within 10 minutes (on GPU)
 SMOKE_MARKER = "_SMOKE_RUN"
+SCALE = 2.0  # the pure-scale variant measured next to the smoke model
+SCALE_TOL = 1e-6  # float32 logits times a power of two are exact; the tolerance covers the estimators' arithmetic
 
 
 class SmokeFailure(RuntimeError):
@@ -55,20 +62,29 @@ def check_data(cfg, ddir) -> None:
     """M1 acceptance inside smoke: the test split refuses to open, and regeneration is byte-identical."""
     import hashlib
 
-    from rtp.data.build import CHOICE, generate, load_choice_items
+    from rtp.data.build import CHOICE, generate, ladder_file, load_choice_items, load_ladder_items
     from rtp.data.splits import SealedSplitError
     from rtp.io import dumps_record
 
-    try:
-        load_choice_items(cfg, "test")
-    except SealedSplitError:
-        pass
-    else:
-        raise SmokeFailure("reading the test split without unseal did not raise")
-    again = generate(cfg)["choice"]
-    blob = "".join(dumps_record(r) + "\n" for r in again if r["split"] == "dev").encode("utf-8")
-    if hashlib.sha256(blob).hexdigest() != hashlib.sha256((ddir / "dev" / CHOICE).read_bytes()).hexdigest():
-        raise SmokeFailure("regenerating the data with the same seed gave different bytes")
+    readers = [lambda: load_choice_items(cfg, "test")]
+    if cfg.ladder.enabled:
+        readers.append(lambda: load_ladder_items(cfg, "core", "test"))
+    for read in readers:
+        try:
+            read()
+        except SealedSplitError:
+            pass
+        else:
+            raise SmokeFailure("reading the test split without unseal did not raise")
+    again = generate(cfg)
+    files = [(CHOICE, [r for r in again["choice"] if r["split"] == "dev"])]
+    if cfg.ladder.enabled:
+        files += [(ladder_file(t), [r for r in again["ladder"] if r["split"] == "dev" and r["tier"] == t])
+                  for t in ("core", "ext", "ctx")]
+    for name, recs in files:
+        blob = "".join(dumps_record(r) + "\n" for r in recs).encode("utf-8")
+        if hashlib.sha256(blob).hexdigest() != hashlib.sha256((ddir / "dev" / name).read_bytes()).hexdigest():
+            raise SmokeFailure(f"regenerating {name} with the same seed gave different bytes")
     log.info("data OK: test split sealed, regeneration byte-identical")
 
 
@@ -92,8 +108,9 @@ def run_smoke(config_path: str = "configs/smoke.yaml", resume: bool = False, ove
             f"results. Use a config with another name (e.g. configs/smoke.yaml) or remove the directory yourself.")
     if not resume and rdir.exists():
         # any directory other than smoke's own data/model dirs and bookkeeping may hold real results: never delete
+        own = ("data", "feedback", "analysis", "cycles")  # plus the smoke model and its variants
         foreign = sorted(d.name for d in rdir.iterdir()
-                         if d.is_dir() and d.name not in ("data", "feedback", model_slug(model_id)))
+                         if d.is_dir() and d.name not in own and not d.name.startswith(model_slug(model_id)))
         if rdir.resolve().parent != (work_dir() / "runs").resolve() or foreign:
             raise SmokeFailure(f"refusing to delete {rdir}: unexpected location or results of other models {foreign}")
         log.info("smoke: removing previous smoke outputs in %s", rdir)
@@ -123,40 +140,59 @@ def run_smoke(config_path: str = "configs/smoke.yaml", resume: bool = False, ove
     step("seal+determinism", lambda: check_data(cfg, ddir))
     del lm  # the M2 stages load the model themselves (one model per stage)
 
-    # ---- M2
+    # ---- one cycle: ladder readout (model and pure-scale variant), open-set, analysis, scorecard
     from rtp import io
-    from rtp.measure.choice import run_measure
-    from rtp.measure.open_ended import run_open_ended
-    from rtp.report import run_report
+    from rtp.cycle import CycleSpec, Job, cycle_dir, run_cycle
+    from rtp.paths import stage_dir
 
-    mdir = step("measure", lambda: run_measure(cfg, model_id, split="dev"))
-    odir = step("open-ended", lambda: run_open_ended(cfg, model_id, split="dev"))
-
-    # ---- M3
-    from rtp.detect.activations import run_extract
-    from rtp.detect.localize import run_localize
-    from rtp.detect.probes import run_probe
-
-    edir = step("extract", lambda: run_extract(cfg, model_id, split="dev"))
-    pdir = step("probe", lambda: run_probe(cfg, model_id))
-    ldir = step("localize", lambda: run_localize(cfg, model_id))
-    rpath = step("report", lambda: run_report(cfg))
-    for d in (ddir, mdir, odir, edir, pdir, ldir):
+    if not cfg.ladder.enabled:
+        raise SmokeFailure(f"config '{cfg.name}' has no ladder items (ladder.enabled); the smoke run needs them")
+    scaled = f"{model_id}@scale={SCALE:g}"
+    spec = CycleSpec(name="smoke", config=config_path, phase="develop", budget_hours=1.0,
+                     question="Does the pipeline run end to end, and does a pure scale change leave every "
+                              "preference level unchanged?",
+                     jobs=[Job("ladder", model_id, "core"), Job("ladder", scaled, "core"), Job("open-set", model_id)],
+                     pairs=[(model_id, scaled)])
+    # the stages run in their own processes: send their events (errors with tracebacks) to the smoke event
+    # file, which the feedback bundle reads and which survives the next smoke run
+    events_path = run_dir(cfg.name).parent / f"{cfg.name}.smoke_events.jsonl"
+    rc = step("cycle", lambda: run_cycle(spec, sets=overrides, restart=not resume,
+                                         env={"RTP_EVENTS_PATH": str(events_path)}))
+    if rc != 0:
+        ledger = io.read_json(cycle_dir(cfg, spec) / "ledger.json")
+        bad = "; ".join(f"{e['job']}: {e['state']}" for e in ledger if e["state"] != "done")
+        raise SmokeFailure(f"the smoke cycle ended with exit code {rc} ({bad}): see "
+                           f"{cycle_dir(cfg, spec) / 'scorecard.md'} and the feedback bundle")
+    dirs = [ddir, stage_dir(cfg.name, model_id, "ladder_core"), stage_dir(cfg.name, scaled, "ladder_core"),
+            stage_dir(cfg.name, model_id, "open_set")]
+    for d in dirs:
         if not io.is_done(d) or not (d / "summary.md").exists():
             raise SmokeFailure(f"stage dir {d} lacks _DONE or summary.md")
-    info = io.read_json(mdir / io.DONE_FILE)
-    cons = info["consistency"]
+    card = io.read_json(cycle_dir(cfg, spec) / "scorecard.json")
+    pair = card["pairs"].get(f"{model_id} -> {scaled}") or {}
+    ident = pair.get("identity")
+    if "error" in pair or not ident:
+        raise SmokeFailure(f"the scorecard has no comparison of the model with its scale variant: {pair}")
+    if not ident.get("n_curves") or not ident.get("n_brand_cells") or ident.get("max_abs_theta_diff") is None:
+        raise SmokeFailure(f"the pure-scale identity could not be checked: no rising anchor curve or no brand with a "
+                           f"preference level in both models ({ident}); the smoke model or config changed?")
+    if abs(ident["c_min"] - SCALE) > SCALE_TOL or abs(ident["c_max"] - SCALE) > SCALE_TOL \
+            or ident["max_abs_theta_diff"] > SCALE_TOL or ident["n_flag_changes"]:
+        raise SmokeFailure(f"pure-scale identity violated: scale multipliers {ident['c_min']}..{ident['c_max']} "
+                           f"(expected {SCALE:g}), largest change of a preference level "
+                           f"{ident['max_abs_theta_diff']} (expected 0), {ident['n_flag_changes']} brand cell(s) "
+                           f"changed their censoring or lost their level (expected 0)")
+    info = io.read_json(dirs[1] / io.DONE_FILE)
 
     total = time.time() - t_start
     log.info("SMOKE PASSED in %.1fs on %s", total, hw)
     for name, sec in timings.items():
         log.info("  %-16s %7.1fs", name, sec)
-    log.info("free-answer consistency (greedy free answer vs O5 argmax): %s on %d items (chance %s; immediate %d, "
-             "deferred %d)%s", f"{cons['agreement']:.1%}" if cons["n_checked"] else "n/a", cons["n_checked"],
-             f"{cons['chance']:.1%}" if cons["n_checked"] else "n/a", cons.get("n_immediate", 0),
-             cons.get("n_deferred", 0), "  (WARNING: below threshold)" if info.get("consistency_warning") else "")
-    log.info("answer coverage: c_free %s, c_forced %s", info.get("c_free"), info.get("c_forced"))
-    log.info("outputs: %s | %s | %s", mdir, odir, rpath)
+    log.info("pure-scale identity on %d anchor curves and %d brand cells: multipliers %s..%s (expected %g), largest "
+             "change of a preference level %.2e, %d flag changes", ident["n_curves"], ident["n_brand_cells"],
+             ident["c_min"], ident["c_max"], SCALE, ident["max_abs_theta_diff"], ident["n_flag_changes"])
+    log.info("letter mass at the forced position: %s; scorecard: %s", info.get("c_forced"),
+             cycle_dir(cfg, spec) / "scorecard.md")
     if total > SMOKE_BUDGET_SECONDS:
         log.warning("smoke took %.0fs, above the %ds budget (the budget is defined for a GPU)", total,
                     SMOKE_BUDGET_SECONDS)

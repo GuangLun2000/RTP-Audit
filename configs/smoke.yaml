@@ -16,6 +16,28 @@ data:
   test_categories: []
   probe_entities_per_category: 4
   probe_templates: 10
+ladder:  # instrument v2 at its smallest: 3 fictional names (all 3 pairs), short ladders
+  enabled: true
+  rating_deltas: [0.3, 1.0]
+  price_deltas: [0.15, 0.5]
+  review_ratios: [5.0, 50.0]
+  n_base: 1
+  direct_entities: 1
+  direct_controls: 2
+  favourable_levels: 1
+ladder_measure:
+  shard_size: 400
+  diag_fraction: 0.05
+  gen_check_fraction: 0.02
+  n_samples: 2
+  max_batch_size: 32
+  max_batch_tokens: 16384
+open_set:
+  prompt_types: ["name"]
+  temperatures: [1.0]
+  n_samples: 4
+  max_batch_size: 32
+  max_batch_tokens: 16384
 measure:
   shard_size: 2000
   gen_check_fraction: 0.02

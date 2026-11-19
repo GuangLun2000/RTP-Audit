@@ -1,4 +1,7 @@
-RTP_AUDIT_AGENT.md
+# unpublished research documents in the repo root (public repo: never commit them), whatever their version
+/RTP_AUDIT_AGENT*.md
+/research_objective*.md
+/RESEARCH_PLAN*.md
 
 # local environment
 .venv/
@@ -10,6 +13,5 @@ rtp_work/
 .DS_Store
 
 # local downloads of Colab results and feedback bundles (public repo: never commit them)
-v_*/
-local/
-research_objective_v1118.md
+/v_*/
+/local/

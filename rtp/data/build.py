@@ -5,7 +5,8 @@ Output (``$RTP_WORK_DIR/runs/{config}/data/``)::
     catalogue.jsonl                     all categories, with a split field
     dev/choice_items.jsonl  dev/probe_items.jsonl
     test/choice_items.jsonl test/probe_items.jsonl      sealed: read only with --unseal
-    cell_counts.csv  data_report.md  data_manifest.json  config.yaml  _DONE
+    dev/ladder_{core,ext,ctx}.jsonl  test/ladder_*.jsonl  (only with ``ladder.enabled``; test sealed)
+    cell_counts.csv  panel_stats.json  data_report.md  data_manifest.json  config.yaml  _DONE
 
 Every file is a pure function of (seed, data config, seed files): two runs with the same
 inputs produce byte-identical files.
@@ -25,6 +26,7 @@ from rtp.config import Config
 from rtp.data import schema
 from rtp.data.catalogue import (all_real_names, catalogue_records, load_category_seeds, load_natural_negatives)
 from rtp.data.choice_items import build_choice_items, cells
+from rtp.data.constants import LADDER_TIERS
 from rtp.data.placebo import load_placebo_file, validate_placebos
 from rtp.data.probe_items import ATTRIBUTES, build_probe_items
 from rtp.data.splits import SPLITS, check_split_access
@@ -35,6 +37,13 @@ log = logging.getLogger(__name__)
 CATALOGUE = "catalogue.jsonl"
 CHOICE = "choice_items.jsonl"
 PROBE = "probe_items.jsonl"
+PANEL_STATS = "panel_stats.json"
+
+
+def ladder_file(tier: str) -> str:
+    if tier not in LADDER_TIERS:
+        raise ValueError(f"unknown ladder tier '{tier}', expected one of {LADDER_TIERS}")
+    return f"ladder_{tier}.jsonl"
 
 
 class DataNotBuiltError(RuntimeError):
@@ -71,8 +80,48 @@ def generate(cfg: Config) -> dict[str, Any]:
     schema.validate_choice_items(items)
     schema.validate_probe_items(probes)
     review = [c for c in cats if seeds.categories[c].needs_review]
-    return {"catalogue": catalogue, "choice": items, "probe": probes, "categories": cats,
-            "needs_review": review, "placebo_stats": placebo_stats}
+    out = {"catalogue": catalogue, "choice": items, "probe": probes, "categories": cats,
+           "needs_review": review, "placebo_stats": placebo_stats, "ladder": []}
+    if cfg.ladder.enabled:
+        from rtp.data.ladder_items import build_ladder_items
+        from rtp.data.ladder_schema import validate_ladder_items
+
+        check_brand_disjoint(cfg, seeds, catalogue)
+        out["ladder"] = build_ladder_items(cfg, seeds, catalogue)
+        fict = {c: {r["entity"] for r in catalogue if r["category"] == c and r["is_placebo"]} for c in cats}
+        validate_ladder_items(out["ladder"], fict, {c: set(v) for c, v in reals.items()})
+    return out
+
+
+def check_brand_disjoint(cfg: Config, seeds, catalogue: list[dict[str, Any]]) -> None:
+    """The sealed test categories must share no real brand (name or alias) with the dev categories, including
+    the open-ended-only Appendix A categories, which are always dev. Otherwise an instrument developed on a
+    brand in one category would be "tested" on the same brand in another."""
+    from rtp.data.catalogue import normalize_name
+
+    def names(split: str) -> set[str]:
+        return {normalize_name(x) for r in catalogue if r["split"] == split and not r["is_placebo"]
+                for x in (r["entity"], *r["aliases"])}
+
+    dev = names("dev") | {normalize_name(x) for brands in seeds.open_ended_only.values() for b in brands
+                          for x in (b.name, *b.aliases)}
+    shared = sorted(names("test") & dev)
+    if shared:
+        raise ValueError(f"test categories share real brands with dev categories: {shared}. Move the categories "
+                         f"that share brands to the same split (data.test_categories).")
+
+
+def panel_stats(ladder: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    """Per split and tier: items, units and prompt characters (what `cycle plan` prices before any model runs)."""
+    out: dict[str, dict[str, Any]] = {}
+    for it in ladder:
+        st = out.setdefault(f"{it['split']}/{it['tier']}", {"n_items": 0, "units": set(), "prompt_chars": 0,
+                                                             "n_options": len(it["options"])})
+        st["n_items"] += 1
+        st["units"].add(it["unit_id"])
+        st["prompt_chars"] += len(it["prompt"])
+    return {k: {"n_items": v["n_items"], "n_units": len(v["units"]), "prompt_chars": v["prompt_chars"],
+                "n_options": v["n_options"]} for k, v in sorted(out.items())}
 
 
 def cell_counts(items: list[dict[str, Any]]) -> pd.DataFrame:
@@ -127,6 +176,18 @@ def data_report(cfg: Config, out: dict[str, Any], counts: pd.DataFrame) -> str:
     lines.append("|" + "---|" * len(piv.columns))
     for row in piv.itertuples(index=False):
         lines.append("| " + " | ".join(str(v) for v in row) + " |")
+    if out.get("ladder"):
+        lines += ["", f"## Ladder items (instrument version {cfg.ladder.version})", "",
+                  "Paired items: target vs one fictional control; d = adverse-evidence level (d > 0 against the "
+                  "target, d < 0 against the control).", "",
+                  "| split | tier | family | stratum | evidence type | levels d | items |", "|---|---|---|---|---|---|---|"]
+        cnt: dict[tuple, list] = {}
+        for it in out["ladder"]:
+            c = cnt.setdefault((it["split"], it["tier"], it["family"], it["stratum"], it["evidence_type"]), [set(), 0])
+            c[0].add(it["d"])
+            c[1] += 1
+        for k, (ds, n) in sorted(cnt.items()):
+            lines.append("| " + " | ".join(k) + f" | {min(ds)}..{max(ds)} | {n} |")
     lines += ["", "## Probe items: attribute level counts (entities)", ""]
     ents = {(p["split"], p["category"], p["entity"]): p["attributes"] for p in probes}
     for a in ATTRIBUTES:
@@ -142,8 +203,12 @@ def data_config_yaml(cfg: Config) -> str:
     """The parts of the run config that determine the data (no default-filled measure sections)."""
     import yaml
 
-    return yaml.safe_dump({"name": cfg.name, "seed": cfg.seed, "data": cfg.to_dict()["data"],
-                           "seed_file_digests": cfg.seed_file_digests()}, sort_keys=False, allow_unicode=True)
+    full = cfg.to_dict()
+    record = {"name": cfg.name, "seed": cfg.seed, "data": full["data"]}
+    if cfg.ladder.enabled:
+        record["ladder"] = full["ladder"]
+    record["seed_file_digests"] = cfg.seed_file_digests()
+    return yaml.safe_dump(record, sort_keys=False, allow_unicode=True)
 
 
 def build_data(cfg: Config, force: bool = False) -> Path:
@@ -159,6 +224,13 @@ def build_data(cfg: Config, force: bool = False) -> Path:
         for name, recs in ((CHOICE, out["choice"]), (PROBE, out["probe"])):
             rel = f"{split}/{name}"
             files[rel] = io.write_jsonl(ddir / rel, [r for r in recs if r["split"] == split])
+        if cfg.ladder.enabled:
+            for tier in LADDER_TIERS:
+                rel = f"{split}/{ladder_file(tier)}"
+                files[rel] = io.write_jsonl(ddir / rel, [r for r in out["ladder"]
+                                                         if r["split"] == split and r["tier"] == tier])
+    if cfg.ladder.enabled:
+        io.write_json(ddir / PANEL_STATS, panel_stats(out["ladder"]))
     # frozen copy of the seed files the data were built from (open-ended reads these)
     d = cfg.data
     snapshot_sha: dict[str, str] = {}
@@ -178,6 +250,7 @@ def build_data(cfg: Config, force: bool = False) -> Path:
                 "test_categories": list(cfg.data.test_categories), "categories": out["categories"],
                 "n_records": files, "sha256": {k: io.file_sha256(ddir / k) for k in sorted(files)},
                 "seed_snapshot_sha256": snapshot_sha,
+                "ladder": cfg.to_dict()["ladder"] if cfg.ladder.enabled else None,
                 "needs_review": out["needs_review"], "placebo_stats": out["placebo_stats"]}
     io.write_json(ddir / "data_manifest.json", manifest)
     io.atomic_write_text(ddir / "summary.md", report)
@@ -210,6 +283,13 @@ def load_seed_snapshot(cfg: Config):
 def load_choice_items(cfg: Config, split: str, unseal: bool = False) -> list[dict[str, Any]]:
     check_split_access(split, unseal)
     return io.read_jsonl(require_built(cfg) / split / CHOICE)
+
+
+def load_ladder_items(cfg: Config, tier: str, split: str, unseal: bool = False) -> list[dict[str, Any]]:
+    check_split_access(split, unseal)
+    if not cfg.ladder.enabled:
+        raise DataNotBuiltError(f"config '{cfg.name}' has no ladder items (set ladder.enabled: true)")
+    return io.read_jsonl(require_built(cfg) / split / ladder_file(tier))
 
 
 def load_probe_items(cfg: Config, split: str, unseal: bool = False) -> list[dict[str, Any]]:

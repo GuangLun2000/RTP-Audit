@@ -1,0 +1,31 @@
+# Cycle C0: instrument shakedown (develop phase, about 1 GPU hour on one G4 / RTX PRO 6000).
+name: c0
+config: configs/e1.yaml
+phase: develop
+question: >-
+  Does the forced letter readout work on the Tulu 3 development models, are the evidence ladders monotone and
+  long enough to bracket the brands' name effects, and what does a ladder pass really cost per token and per item?
+budget_hours: 3
+jobs:
+  - stage: ladder
+    tier: core
+    models:
+      - allenai/Llama-3.1-Tulu-3-8B-SFT
+      - allenai/Llama-3.1-Tulu-3-8B-DPO
+  # Wiring check of the pure-scale variant: every letter-logit difference must be exactly twice the SFT one.
+  - stage: ladder
+    tier: core
+    models: ["allenai/Llama-3.1-Tulu-3-8B-SFT@scale=2"]
+  - stage: open-set
+    models: [allenai/Llama-3.1-Tulu-3-8B-SFT]
+pairs:
+  - [allenai/Llama-3.1-Tulu-3-8B-SFT, "allenai/Llama-3.1-Tulu-3-8B-SFT@scale=2"]
+  - [allenai/Llama-3.1-Tulu-3-8B-SFT, allenai/Llama-3.1-Tulu-3-8B-DPO]
+decisions:
+  - "Ladder steps: extend a ladder whose top step censors more than 10% of brands; add a finer first step where most brands sit below it."
+  - "Letter form (sp / ns) and whether the letter readout is valid (c_forced >= 0.9, agreement with letters+names masses)."
+  - "Fictional names: replace names whose own pull is an outlier (rule to be fixed in DECISIONS.md before replacing)."
+  - "Cost model: the calibrated multiplier k sets the panel sizes of C1 and later cycles."
+cut_order:
+  - "open-set on SFT"
+  - "the @scale=2 wiring check (the identity is also tested in pytest and smoke)"

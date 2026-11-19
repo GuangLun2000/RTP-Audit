@@ -18,7 +18,10 @@ from rtp.log import setup_logging
 
 log = logging.getLogger("rtp.cli")
 
-FUTURE_STAGES = {"transplant": "M4", "score": "M4", "plant": "M5", "eval": "M6"}
+# every command that loads the model given by --model (the develop / confirm guard covers all of them)
+MODEL_STAGES = ("ladder", "open-set", "measure", "format-probe", "open-ended", "extract", "probe", "localize")
+FUTURE_STAGES = {"train": "batch 2: content-neutral and dose-planting LoRA runs",
+                 "freeze": "batch 3: instrument freeze before the confirmation phase"}
 
 
 def _add_model_stage_args(p: argparse.ArgumentParser) -> None:
@@ -40,8 +43,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="override a config value, e.g. --set measure.max_batch_size=128 (YAML value; repeatable)")
     sub = parser.add_subparsers(dest="stage", required=True)
 
-    p = sub.add_parser("smoke", help="end-to-end smoke run (M0 forward, M1 data, M2 measurement, M3 extract, "
-                                     "probe and localize)")
+    p = sub.add_parser("smoke", help="end-to-end smoke run: data, ladder readout, a pure-scale variant, analysis, "
+                                     "open-set, and a cycle")
     p.add_argument("--config", default="configs/smoke.yaml")
     p.add_argument("--resume", action="store_true",
                    help="reuse finished smoke outputs instead of starting from a clean runs/<name>/ dir")
@@ -50,7 +53,35 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--config", required=True)
     p.add_argument("--force", action="store_true")
 
-    p = sub.add_parser("measure", help="choice-letter scoring and name effects (M2)")
+    p = sub.add_parser("ladder", help="letter-logit readout of the paired ladder items (instrument v2)")
+    _add_model_stage_args(p)
+    p.add_argument("--tier", default="core", choices=["core", "ext", "ctx"],
+                   help="item file: core panel, extension, or the four-option context arm (default: core)")
+
+    p = sub.add_parser("open-set", help="closed-set brand distribution of an open question, and sampled answers")
+    _add_model_stage_args(p)
+
+    p = sub.add_parser("analyze", help="CPU: preference levels, anchor curves and checks per model; stage pairs")
+    p.add_argument("--config", required=True)
+    p.add_argument("--model", action="append", default=[], help="model id (repeatable); default: every model "
+                                                                "with a finished ladder stage")
+    p.add_argument("--pair", nargs=2, action="append", default=[], metavar=("A", "B"),
+                   help="compare stage A -> stage B (repeatable)")
+    p.add_argument("--split", default="dev", choices=["dev", "test"])
+    p.add_argument("--unseal", action="store_true", help="required to analyse the sealed test split")
+
+    p = sub.add_parser("cycle", help="one budgeted GPU session: plan (price the jobs), run, report (scorecard)")
+    p.add_argument("action", choices=["plan", "run", "report"])
+    p.add_argument("--cycle", required=True, help="cycle file, e.g. configs/cycles/c0.yaml")
+    p.add_argument("--restart", action="store_true",
+                   help="run: start the cycle over (forget the code state and overrides recorded when it started)")
+    p.add_argument("--redo-stale", action="store_true",
+                   help="plan/run, develop phase only: re-measure from scratch the jobs whose existing stage was "
+                        "built by other code, items or settings, or interrupted in another environment")
+    p.add_argument("--unseal", action="store_true", help="run/report: required for cycles that read the test split")
+    p.add_argument("--budget-hours", type=float, help="run: a smaller budget than the cycle file's for this session")
+
+    p = sub.add_parser("measure", help="(legacy four-option family) choice scoring and name effects")
     _add_model_stage_args(p)
 
     p = sub.add_parser("format-probe", help="quick check of how a model answers the choice question (dev sample)")
@@ -59,27 +90,26 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--n-items", type=int, default=40, help="items to score and decode (default 40)")
     p.add_argument("--prompt-mode", default="auto", choices=["auto", "chat", "base"])
 
-    p = sub.add_parser("open-ended", help="Name / Choose / Recommend / pick measurement (M2)")
+    p = sub.add_parser("open-ended", help="(legacy) Name / Choose / Recommend / pick measurement")
     _add_model_stage_args(p)
 
-    p = sub.add_parser("extract", help="activations at the brand name / answer position, float16 shards (M3)")
+    p = sub.add_parser("extract", help="(frozen white-box stack) activations at the name / answer position")
     _add_model_stage_args(p)
 
-    p = sub.add_parser("probe", help="linear probes, control task, knowledge subspace K, M4 readiness (M3; dev only)")
+    p = sub.add_parser("probe", help="(frozen white-box stack) linear probes, control task, subspace K; dev only")
     p.add_argument("--config", required=True)
     p.add_argument("--model", required=True)
     p.add_argument("--force", action="store_true")
     p.add_argument("--prompt-mode", default="auto", choices=["auto", "chat", "base"],
                    help="must match the prompt mode used by `extract`")
 
-    p = sub.add_parser("localize", help="where the name effect is carried: full transplants by layer and site "
-                                        "(M3 readiness; dev only)")
+    p = sub.add_parser("localize", help="(frozen white-box stack) where the name effect is carried; dev only")
     p.add_argument("--config", required=True)
     p.add_argument("--model", required=True)
     p.add_argument("--force", action="store_true")
     p.add_argument("--prompt-mode", default="auto", choices=["auto", "chat", "base"])
 
-    p = sub.add_parser("report", help="cross-model Markdown report from finished stages")
+    p = sub.add_parser("report", help="(legacy) cross-model Markdown report from finished measure stages")
     p.add_argument("--config", required=True)
     p.add_argument("--unseal", action="store_true", help="also include test-split results")
 
@@ -120,8 +150,7 @@ def main(argv: list[str] | None = None) -> int:
         set_work_dir(args.work_dir)
 
     if args.stage in FUTURE_STAGES:
-        log.error("stage '%s' belongs to %s and is not implemented in this round", args.stage,
-                  FUTURE_STAGES[args.stage])
+        log.error("'%s' is not implemented yet (%s)", args.stage, FUTURE_STAGES[args.stage])
         return 2
 
     import time
@@ -129,12 +158,15 @@ def main(argv: list[str] | None = None) -> int:
 
     from rtp import events
     from rtp.config import ConfigError
+    from rtp.cycle import BudgetExceeded, CycleError
     from rtp.data.build import DataNotBuiltError
     from rtp.data.splits import SealedSplitError
-    from rtp.io import StageConfigMismatch
+    from rtp.io import DeadlineReached, StageConfigMismatch
     from rtp.models import ModelLoadError
     from rtp.paths import WorkDirError
+    from rtp.phase import PhaseError
     from rtp.smoke import SmokeFailure
+    from rtp.variants import VariantError
 
     handler = _start_events(args, argv)
     t0 = time.time()
@@ -144,7 +176,16 @@ def main(argv: list[str] | None = None) -> int:
         log.error("%s", exc)
         events.emit("error", f"SealedSplitError: {exc}", exit_code=3, argv=_argv(argv))
         rc = 3
-    except (StageConfigMismatch, DataNotBuiltError, ModelLoadError, WorkDirError, ConfigError, SmokeFailure) as exc:
+    except BudgetExceeded as exc:  # the plan does not fit: nothing was run
+        log.error("%s", exc)
+        events.emit("error", f"BudgetExceeded: {exc}", exit_code=5, argv=_argv(argv))
+        rc = 5
+    except DeadlineReached as exc:  # the session's budget ran out between two shards: resumable, not a bug
+        log.warning("%s", exc)
+        events.emit("warning", f"DeadlineReached: {exc}", exit_code=6, argv=_argv(argv))
+        rc = 6
+    except (StageConfigMismatch, DataNotBuiltError, ModelLoadError, WorkDirError, ConfigError, SmokeFailure,
+            PhaseError, VariantError, CycleError) as exc:
         log.error("%s: %s", type(exc).__name__, exc)
         events.emit("error", f"{type(exc).__name__}: {exc}", exit_code=4, argv=_argv(argv),
                     traceback=traceback.format_exc())
@@ -170,6 +211,14 @@ def _start_events(args: argparse.Namespace, argv: list[str] | None):
     from rtp.log import RedactSecrets
 
     cfg_path = getattr(args, "config", None) or ("configs/smoke.yaml" if args.stage == "smoke" else None)
+    forced = os.environ.get("RTP_EVENTS_PATH", "").strip()  # a parent command collects its stages' events
+    if args.stage == "cycle":
+        try:
+            from rtp.cycle import load_cycle
+
+            cfg_path = load_cycle(args.cycle).config
+        except Exception:  # noqa: BLE001 - the command itself reports a bad cycle file
+            return None
     if not cfg_path:
         return None
     try:
@@ -180,6 +229,10 @@ def _start_events(args: argparse.Namespace, argv: list[str] | None):
         # smoke deletes and recreates its own run dir, so its events live next to it, never inside it
         path = run_dir(name).parent / f"{name}.smoke_events.jsonl" if args.stage == "smoke" else \
             run_dir(name) / "events.jsonl"
+        if forced:
+            from pathlib import Path
+
+            path = Path(forced)
     except Exception:  # noqa: BLE001 - the command itself will report config / work-dir problems
         return None
     events.configure(path, config=name, stage=args.stage, model=getattr(args, "model", None))
@@ -210,9 +263,36 @@ def _dispatch(args: argparse.Namespace) -> int:
                           n_choice=args.n_choice, n_probe=args.n_probe, seed=args.seed, repair=args.repair)
         return 0
 
+    if args.stage == "cycle":
+        from rtp import cycle
+
+        spec = cycle.load_cycle(args.cycle)
+        if args.action == "plan":
+            from rtp.data.build import require_built
+
+            cfg = cycle.cycle_config(spec, args.set)
+            require_built(cfg)  # the plan prices the built item files
+            cycle.run_plan(cfg, spec, redo_stale=args.redo_stale)
+            return 0
+        if args.action == "report":
+            cycle.run_report(spec, sets=args.set, unseal=args.unseal)
+            return 0
+        return cycle.run_cycle(spec, restart=args.restart, unseal=args.unseal, sets=args.set,
+                               budget_hours=args.budget_hours, redo_stale=args.redo_stale)
+
     from rtp.config import apply_overrides
 
     cfg = apply_overrides(load_config(args.config), args.set)
+    if args.stage == "analyze":
+        from rtp import analyze
+        from rtp.data.splits import check_split_access
+        from rtp.phase import check_test_split_allowed
+
+        check_split_access(args.split, args.unseal)
+        check_test_split_allowed(cfg, args.split)
+        analyze.run_analyze(cfg, models=args.model, pairs=[tuple(x) for x in args.pair], split=args.split,
+                            unseal=args.unseal)
+        return 0
     if args.stage == "status":
         from rtp.ops import run_status
 
@@ -223,14 +303,30 @@ def _dispatch(args: argparse.Namespace) -> int:
 
         build_feedback(cfg, tail=args.tail, unseal=args.unseal)
         return 0
-    if args.stage in ("measure", "open-ended", "extract"):
+    if args.stage in ("ladder", "open-set", "measure", "open-ended", "extract"):
         from rtp.data.splits import check_split_access
 
         check_split_access(args.split, args.unseal)  # fail before any model is loaded
+    if args.stage in MODEL_STAGES:
+        from rtp.phase import check_model_allowed, check_test_split_allowed
+
+        check_model_allowed(cfg, args.model)  # no stage loads a confirmation model before the freeze
+        if args.stage in ("ladder", "open-set"):
+            check_test_split_allowed(cfg, args.split)
     if args.stage == "build-data":
         from rtp.data.build import build_data
 
         build_data(cfg, force=args.force)
+    elif args.stage == "ladder":
+        from rtp.measure.ladder import run_ladder
+
+        run_ladder(cfg, args.model, tier=args.tier, split=args.split, unseal=args.unseal, force=args.force,
+                   prompt_mode=args.prompt_mode)
+    elif args.stage == "open-set":
+        from rtp.measure.open_set import run_open_set
+
+        run_open_set(cfg, args.model, split=args.split, unseal=args.unseal, force=args.force,
+                     prompt_mode=args.prompt_mode)
     elif args.stage == "measure":
         from rtp.measure.choice import run_measure
 

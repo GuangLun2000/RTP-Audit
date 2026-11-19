@@ -11,7 +11,7 @@ from collections import defaultdict
 from collections.abc import Iterable
 from typing import Any
 
-from rtp.config import HANDICAP_MIN_EVIDENCE
+from rtp.data.constants import HANDICAP_MIN_EVIDENCE
 
 
 class SchemaError(ValueError):

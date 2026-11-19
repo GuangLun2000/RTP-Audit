@@ -29,6 +29,7 @@ from rtp.data.build import load_catalogue, load_seed_snapshot
 from rtp.data.catalogue import brand_phrase, brand_phrase_plural, indefinite_article, normalize_name
 from rtp.data.splits import check_split_access
 from rtp.log import add_file_log
+from rtp.measure.parse import BrandMatcher, _norm_keep_case  # noqa: F401 (moved; re-exported)
 from rtp.models import LoadedModel, apply_prompt_mode, chat_prompt, encode
 from rtp.paths import stage_dir
 from rtp.rng import stable_int
@@ -50,44 +51,6 @@ ORDERS = ("forward", "reversed")
 
 
 # --------------------------------------------------------------------------- matching
-def _norm_keep_case(text: str) -> str:
-    t = unicodedata.normalize("NFKD", text)
-    t = "".join(ch for ch in t if not unicodedata.combining(ch))
-    t = t.replace("'", "").replace("’", "")
-    return re.sub(r"[^0-9A-Za-z]+", " ", t).strip()
-
-
-class BrandMatcher:
-    """Map a free-text answer to a brand: whole-word, accent/punctuation-insensitive, case-insensitive
-    unless the brand is flagged ``match_case`` (then the listed spellings and their ALL-CAPS forms match). A
-    trailing "s" is tolerated so that possessives and
-    plurals ("Nike's" -> "Nikes", "Reeboks") match. Earliest match wins; ties go to the longest variant."""
-
-    def __init__(self, entries: list[tuple[str, list[str], bool]]):
-        self.patterns: list[tuple[re.Pattern, str, bool, int]] = []
-        for entity, variants, match_case in entries:
-            spellings = [entity, *variants]
-            if match_case:  # case-sensitive brands still match when written in capitals ("VISA", "CHASE")
-                spellings += [x.upper() for x in spellings]
-            for v in dict.fromkeys(spellings):
-                nv = _norm_keep_case(v)
-                if not nv:
-                    continue
-                key = nv if match_case else nv.lower()
-                pat = re.compile(r"(?<![0-9A-Za-z])" + re.escape(key) + r"s?(?![0-9A-Za-z])")
-                self.patterns.append((pat, entity, match_case, len(key)))
-
-    def match(self, text: str) -> str | None:
-        cs = _norm_keep_case(text or "")
-        ci = cs.lower()
-        best: tuple[int, int, str] | None = None
-        for pat, entity, match_case, length in self.patterns:
-            m = pat.search(cs if match_case else ci)
-            if m and (best is None or (m.start(), -length) < (best[0], best[1])):
-                best = (m.start(), -length, entity)
-        return best[2] if best else None
-
-
 def answer_key(text: str, entity: str | None) -> str:
     return entity if entity is not None else "other:" + (normalize_name(text)[:40] or "<empty>")
 

@@ -1,4 +1,5 @@
-"""Stage identity and provenance checks for per-model stages (measure, open-ended, extract, probe, localize).
+"""Stage identity and provenance checks for per-model stages (ladder, open-set; legacy: measure, open-ended,
+extract, probe, localize).
 
 A stage dir is owned by one hash of: stage settings, model, split, prompt mode, the sha256 of
 the input files it reads, and the digest of the code that computes it. Its metadata also
@@ -18,21 +19,29 @@ from rtp.provenance import RESUME_CRITICAL, environment, stage_code_digest
 
 log = logging.getLogger(__name__)
 
-STAGE_MODULES = {"measure": "rtp.measure.choice", "open_ended": "rtp.measure.open_ended",
+STAGE_MODULES = {"ladder": "rtp.measure.ladder", "open_set": "rtp.measure.open_set",
+                 "measure": "rtp.measure.choice", "open_ended": "rtp.measure.open_ended",
                  "extract": "rtp.detect.activations", "probe": "rtp.detect.probes",
                  "localize": "rtp.detect.localize"}
 
 
-def stage_inputs_digest(cfg: Config, kind: str, split: str, model_id: str | None = None) -> str:
+def stage_inputs_digest(cfg: Config, kind: str, split: str, model_id: str | None = None,
+                        tier: str | None = None) -> str:
     """Digest of what a stage reads: data files from the manifest (requires built data); for the probe stage
-    also the identity of the extract stage whose activations it consumes."""
-    from rtp.data.build import CATALOGUE, CHOICE, PROBE, require_built
+    also the identity of the extract stage whose activations it consumes. ``tier``: the ladder item file."""
+    from rtp.data.build import CATALOGUE, CHOICE, PROBE, ladder_file, require_built
 
     manifest = io.read_json(require_built(cfg) / "data_manifest.json")
     sha = manifest["sha256"]
-    if kind in ("measure", "localize"):
+    if kind == "ladder":
+        rel = f"{split}/{ladder_file(tier or '')}"
+        if rel not in sha:
+            raise io.StageConfigMismatch(f"the built data of '{cfg.name}' have no ladder items ({rel}); set "
+                                         f"ladder.enabled and rebuild")
+        parts = [sha[rel], sha[CATALOGUE]]
+    elif kind in ("measure", "localize"):
         parts = [sha[f"{split}/{CHOICE}"], sha[CATALOGUE]]
-    elif kind == "open_ended":  # the catalogue and the seed snapshot (brands, aliases, Appendix A)
+    elif kind in ("open_ended", "open_set"):  # the catalogue and the seed snapshot (brands, aliases, Appendix A)
         snap = manifest["seed_snapshot_sha256"]
         parts = [sha[CATALOGUE]] + [snap[k] for k in sorted(snap)]
     elif kind == "extract":
@@ -51,9 +60,10 @@ def stage_inputs_digest(cfg: Config, kind: str, split: str, model_id: str | None
     return "-".join(p[:16] for p in parts)
 
 
-def stage_hash(cfg: Config, kind: str, model_id: str, split: str, prompt_mode: str = "auto") -> str:
+def stage_hash(cfg: Config, kind: str, model_id: str, split: str, prompt_mode: str = "auto",
+               tier: str | None = None) -> str:
     return cfg.stage_hash(kind, model_id, split, prompt_mode,
-                          inputs=stage_inputs_digest(cfg, kind, split, model_id),
+                          inputs=stage_inputs_digest(cfg, kind, split, model_id, tier),
                           code=stage_code_digest(STAGE_MODULES[kind]))
 
 

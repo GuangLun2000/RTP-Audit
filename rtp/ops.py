@@ -27,16 +27,31 @@ from rtp.paths import data_dir, run_dir
 
 log = logging.getLogger(__name__)
 
-STAGE_DIRS = {"measure": ("measure", "dev"), "measure_test": ("measure", "test"),
-              "open_ended": ("open_ended", "dev"), "open_ended_test": ("open_ended", "test"),
-              "extract": ("extract", "dev"), "extract_test": ("extract", "test"), "probe": ("probe", "dev"),
-              "localize": ("localize", "dev")}
-PIPELINE = ("measure", "open_ended", "extract", "probe", "localize")
+# stage directory name -> (stage kind, split, ladder tier)
+STAGE_DIRS = {**{f"ladder_{t}": ("ladder", "dev", t) for t in ("core", "ext", "ctx")},
+              **{f"ladder_{t}_test": ("ladder", "test", t) for t in ("core", "ext", "ctx")},
+              "open_set": ("open_set", "dev", None), "open_set_test": ("open_set", "test", None),
+              # legacy four-option family and the frozen white-box stages (still listed when present)
+              "measure": ("measure", "dev", None), "measure_test": ("measure", "test", None),
+              "open_ended": ("open_ended", "dev", None), "open_ended_test": ("open_ended", "test", None),
+              "extract": ("extract", "dev", None), "extract_test": ("extract", "test", None),
+              "probe": ("probe", "dev", None), "localize": ("localize", "dev", None)}
+PIPELINE = ("ladder_core", "ladder_ext", "ladder_ctx", "open_set")  # instrument v2 (configs with ladder.enabled)
+LEGACY_PIPELINE = ("measure", "open_ended")  # extract / probe / localize are frozen: run them by hand if needed
+
+
+def pipeline(cfg: Config) -> tuple[str, ...]:
+    """The stages a model of this config is expected to have (rows 'not started' in `status`)."""
+    return PIPELINE if cfg.ladder.enabled else LEGACY_PIPELINE
 
 
 # --------------------------------------------------------------------------- status
 def _warnings_of(kind: str, info: dict[str, Any]) -> list[str]:
     w = []
+    if kind == "ladder" and info.get("coverage_warning"):
+        return [f"letter mass at the forced position {info.get('c_forced')} < 0.9 (the letter readout is partial)"]
+    if kind == "open_set" and info.get("coverage_warning"):
+        return [f"open-set coverage {info.get('coverage')} (the model rarely answers with a catalogue brand)"]
     if info.get("consistency_warning"):
         c = info.get("consistency", {})
         w.append(f"free-answer agreement {c.get('agreement', float('nan')):.0%} < 90%")
@@ -73,11 +88,11 @@ def collect_status(cfg: Config, unseal: bool = False) -> list[dict[str, Any]]:
         if sdir.name not in STAGE_DIRS:
             continue
         meta = io.read_json(meta_path)
-        kind, split = STAGE_DIRS[sdir.name]
+        kind, split, tier = STAGE_DIRS[sdir.name]
         model_id = meta.get("model_id", sdir.parent.name)
         seen.add((model_id, sdir.name))
         try:
-            expected = stages.stage_hash(cfg, kind, model_id, split, meta.get("prompt_mode", "auto"))
+            expected = stages.stage_hash(cfg, kind, model_id, split, meta.get("prompt_mode", "auto"), tier=tier)
         except Exception:  # noqa: BLE001 - e.g. data missing: cannot verify
             expected = None
         sealed = split == "test" and not unseal
@@ -94,7 +109,7 @@ def collect_status(cfg: Config, unseal: bool = False) -> list[dict[str, Any]]:
                      "warnings": ["(sealed: pass --unseal to show)"] if sealed and info else _warnings_of(kind, info),
                      "elapsed_s": info.get("elapsed_s"), "path": str(sdir), "sealed": sealed})
     for m in cfg.models:
-        for st in PIPELINE:
+        for st in pipeline(cfg):
             if (m, st) not in seen:
                 rows.append({"model": m, "stage": st, "state": "not started", "warnings": [], "elapsed_s": None,
                              "path": "", "sealed": False})
@@ -202,18 +217,20 @@ def run_doctor(cfg: Config | None = None, check_hub: bool = True) -> int:
         else:
             _check(res, "data", "WARN", "not built yet (run build-data)")
         if check_hub:
-            for m in cfg.models:
-                spec = registry.get_model_spec(m)
+            for m in dict.fromkeys([*cfg.models, *cfg.confirm_models]):
                 try:
-                    registry.validate_repo_id(m, "model")
+                    spec = registry.get_model_spec(m)
+                    hub_id = registry.base_model_id(m)  # a variant is checked through its base checkpoint
+                    registry.validate_repo_id(hub_id, "model")
                     if spec is not None and spec.gated:  # metadata is public; check that FILES are accessible
                         from huggingface_hub import HfApi
 
-                        HfApi().auth_check(m)
+                        HfApi().auth_check(hub_id)
                     _check(res, f"hub:{m}", "PASS", "accessible" + (" (gated: token and licence OK)"
                                                                    if spec and spec.gated else ""))
                 except Exception as exc:  # noqa: BLE001
-                    detail = registry.gated_message(m) if spec and spec.gated else str(exc).splitlines()[0][:200]
+                    known = registry.MODELS.get(m)
+                    detail = registry.gated_message(m) if known and known.gated else str(exc).splitlines()[0][:200]
                     _check(res, f"hub:{m}", "FAIL", detail)
     width = max(len(r["check"]) for r in res)
     for r in res:
@@ -229,6 +246,13 @@ def run_doctor(cfg: Config | None = None, check_hub: bool = True) -> int:
 
 # --------------------------------------------------------------------------- feedback
 SUGGESTIONS = [
+    ("letter mass at the forced position", "After \"Answer:\" the model puts little probability on the option "
+                                            "letters. Check the prompt mode and chat_template_kwargs in the registry; "
+                                            "compare c_forced with cq_forced (letters + names) in the stage summary: if "
+                                            "names carry the mass, the letter readout is not valid for this model. "
+                                            "Report it; do not change the readout for one model."),
+    ("open-set coverage", "The model rarely answers the open question with a catalogue brand. Look at samples.parquet "
+                          "(text column) for preambles or refusals before reading any N_eff."),
     ("answer coverage", "Even after \"Answer:\" the model rarely names an option (letter or name). Check the prompt "
                         "mode (registry is_chat / --prompt-mode), registry chat_template_kwargs, and run `format-probe` "
                         "on the model to see its raw answers."),
@@ -266,7 +290,8 @@ def _rules(rows, errors) -> list[str]:
                    "stages whose code and inputs did not change are reused).")
     if any(r["state"] == "stale" or r["state"].startswith("partial+stale") for r in rows):
         out.append("Some stages are stale (other code/data/settings than the current checkout): re-run them with "
-                   "--force, or check out the commit they were built with.")
+                   "--force (a cycle: `cycle run --redo-stale`, develop phase only), or check out the commit they "
+                   "were built with.")
     if any(r["state"].startswith("partial (") for r in rows):
         out.append("Some stages are partial: re-run the same command to resume (finished shards are kept).")
     text = " ".join(w for r in rows for w in r["warnings"]).lower()
@@ -279,6 +304,50 @@ def _rules(rows, errors) -> list[str]:
 
 
 SUMMARY_LINES, SUMMARY_CHARS = 90, 7000  # per stage summary in the feedback bundle
+
+
+def _scorecards(cfg: Config, n: int = 3) -> list[Path]:
+    """The newest cycle scorecards of the run (dev results only: a cycle that read the test split is skipped
+    unless its scorecard is asked for directly)."""
+    out = []
+    for path in sorted((run_dir(cfg.name) / "cycles").glob("*/scorecard.md"), key=lambda p: p.stat().st_mtime):
+        try:
+            card = io.read_json(path.with_suffix(".json"))
+        except Exception:  # noqa: BLE001
+            continue
+        if any("[test]" in k for k in list(card.get("models", {})) + list(card.get("pairs", {}))):
+            continue
+        out.append(path)
+    return out[-n:]
+
+
+# Rules on the instrument's own checks (rtp.scale.checks): each maps a failed check to what to look at next.
+# They only SUGGEST. In the develop phase an instrument change needs a version bump and a DECISIONS.md line;
+# in the confirm phase nothing changes.
+INSTRUMENT_RULES = [
+    ("readout", "Readout check failed: the option letters do not carry the answer for this model. Inspect the "
+                "decoded sample (gen_text) and cq_forced vs c_forced before trusting any preference level."),
+    ("ladder", "Ladder check failed: an anchor curve is not monotone, or many brands fall beyond the last step "
+               "(censored) or below the first one (floor). Develop phase: adjust the step lists in the config "
+               "(ladder.*_deltas), bump ladder.version, rebuild, re-measure. Confirm phase: report it as is."),
+    ("anchor_clean", "Anchor check failed: some fictional names pull as hard as real brands. Look at the pulls table "
+                     "of the analysis; replace outlying names in data/seeds/placebo_names.yaml by the rule fixed in "
+                     "DECISIONS.md (develop phase only)."),
+    ("common_channel", "Direct and converted preference levels disagree: real names respond to evidence differently "
+                       "from fictional ones (a name-by-evidence interaction). This is a finding about the model, "
+                       "not a bug: report both levels; do not pick the one that looks better."),
+]
+
+
+def _instrument_rules(cfg: Config) -> list[str]:
+    failed: set[str] = set()
+    for path in _scorecards(cfg, n=1):
+        card = io.read_json(path.with_suffix(".json"))
+        for res in card.get("models", {}).values():
+            for name, chk in (res.get("checks") or {}).items():
+                if isinstance(chk, dict) and chk.get("pass") is False:
+                    failed.add(name)
+    return [advice for key, advice in INSTRUMENT_RULES if key in failed]
 
 
 def _head(path: Path, n: int, max_chars: int) -> str:
@@ -361,8 +430,16 @@ def build_feedback(cfg: Config, tail: int = 60, unseal: bool = False) -> Path:
     if unfinished:
         lines += ["", "## Commands that never finished (killed, out of host memory, or disconnected?)", ""] + \
             [f"- {e.get('time')} `{e.get('message')}`" for e in unfinished[-20:]]
+    cards = _scorecards(cfg)
+    if cards:
+        lines += ["", "## Cycle scorecards (newest last)", "",
+                  "Each cycle is one budgeted GPU session: its question, jobs with predicted and actual time, the "
+                  "instrument checks per model, the stage-pair comparisons and what changed since the previous "
+                  "cycle. Read these first.", ""]
+        for path in cards:
+            lines += [f"### {path.parent.name}", "", _head(path, 220, 14000), ""]
     lines += ["", "## Stage status", "", status_markdown(rows), "## Suggested next actions", ""]
-    lines += [f"{i + 1}. {s}" for i, s in enumerate(_rules(rows, errors))]
+    lines += [f"{i + 1}. {s}" for i, s in enumerate(_rules(rows, errors) + _instrument_rules(cfg))]
     lines += ["", f"## Errors ({len(errors)} unresolved; {len(all_errors) - len(errors)} resolved by a later "
                   f"successful run and omitted)", ""]
     for e in errors[-20:]:
@@ -396,6 +473,13 @@ def build_feedback(cfg: Config, tail: int = 60, unseal: bool = False) -> Path:
                   "```", ""]
     for fp in sorted((rdir / "format_probe").glob("*/summary.md")):  # dev only by construction
         lines += [f"### {fp.parent.name} / format-probe", "", "```", _head(fp, SUMMARY_LINES, SUMMARY_CHARS), "```", ""]
+    adir = rdir / "analysis"
+    summaries = sorted(adir.glob("*/summary.md")) + sorted(adir.glob("_pairs/*/summary.md"))
+    if summaries:
+        lines += ["", "## Analysis summaries (dev; preference levels, anchor curves, stage pairs)", ""]
+        for fp in summaries:
+            lines += [f"### {fp.parent.parent.name + '/' if fp.parent.parent.name == '_pairs' else ''}{fp.parent.name}",
+                      "", "```", _head(fp, SUMMARY_LINES, SUMMARY_CHARS), "```", ""]
     lines += ["", "## Log tails of failed or partial stages", ""]
     for r in rows:
         if r["path"] and not r.get("sealed") and (r["state"].startswith("partial") or r["state"] == "stale"):

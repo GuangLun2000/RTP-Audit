@@ -32,6 +32,16 @@ class StageConfigMismatch(RuntimeError):
     pass
 
 
+class DeadlineReached(RuntimeError):
+    """The session's time budget ($RTP_DEADLINE, epoch seconds) ran out between two shards. The stage stays
+    half-finished and resumes from its finished shards on the next run."""
+
+
+def deadline() -> float | None:
+    raw = os.environ.get("RTP_DEADLINE", "").strip()
+    return float(raw) if raw else None
+
+
 # --------------------------------------------------------------------------- basic files
 def atomic_write_bytes(path: Path, data: bytes) -> None:
     path = Path(path)
@@ -188,6 +198,10 @@ def run_sharded(records: Sequence[Any], shard_size: int, out_dir: Path,
         if marker.exists() and path.exists():
             log.info("%s: shard %d/%d already done, skipping", desc, idx + 1, n_shards)
             continue
+        limit = deadline()
+        if limit is not None and time.time() >= limit:
+            raise DeadlineReached(f"{desc}: time budget reached before shard {idx + 1}/{n_shards}; finished "
+                                  f"shards are kept, re-run the same command to continue")
         chunk = records[idx * shard_size: (idx + 1) * shard_size]
         log.info("%s: shard %d/%d (%d records)", desc, idx + 1, n_shards, len(chunk))
         ts = time.time()

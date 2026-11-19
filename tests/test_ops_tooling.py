@@ -126,14 +126,27 @@ def test_progress_log_mode(monkeypatch, caplog):
     assert any("ETA" in m for m in msgs) and any("20/20 done" in m for m in msgs)
 
 
-def test_notebook_covers_spec_cells():
-    nb = json.loads((REPO_ROOT / "colab/run_pilot.ipynb").read_text())
+def test_notebook_covers_a_cycle_session():
+    """The notebook is a thin list of calls: environment, smoke and tests, data, then one cycle (plan, run,
+    scorecard) and the feedback bundle. The frozen white-box stages are not part of it."""
+    nb = json.loads((REPO_ROOT / "colab/run_cycle.ipynb").read_text())
     src = "\n".join("".join(c["source"]) for c in nb["cells"])
     for needle in ('drive.mount("/content/drive")', 'os.environ["RTP_WORK_DIR"] = "/content/drive/MyDrive/rtp"',
                    'os.environ["HF_HOME"] = "/content/hf"', 'userdata.get("HF_TOKEN")', "nvidia-smi",
-                   '"pip", "install", "-q", "-e", ".[dev]"', 'nb.run("smoke")', "nb.pytest(", '"build-data"', '"measure"',
-                   '"open-ended"', '"extract"', '"probe"', '"report"', "nb.feedback(CONFIG)", "doctor"):
+                   '"pip", "install", "-q", "-e", ".[dev]"', 'nb.run("smoke")', "nb.pytest(", '"build-data"',
+                   'nb.run("cycle", "plan", "--cycle", CYCLE, *REDO, strict=True)',
+                   'nb.run("cycle", "run", "--cycle", CYCLE, *REDO)', "AFTER_INSTRUMENT_CHANGE = False",
+                   "scorecard.md", "nb.feedback(CONFIG)", "doctor"):
         assert needle in src, needle
+    code = "\n".join("".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code")
+    for frozen in ('"extract"', '"probe"', '"localize"', '"measure"'):
+        assert frozen not in code, frozen
+    from rtp.cycle import load_cycle
+    import re as _re
+
+    cycle = _re.search(r'CYCLE = "([^"]+)"', src).group(1)
+    config = _re.search(r'CONFIG = "([^"]+)"', src).group(1)
+    assert load_cycle(cycle).config == config  # cell 1 names a cycle file and the run config it uses
 
 
 def test_event_log_redacts_secrets(tmp_path, monkeypatch):
@@ -229,7 +242,7 @@ def test_notebook_bootstraps_from_github_and_is_versioned():
 
     from rtp.notebook import notebook_rev
 
-    path = REPO_ROOT / "colab" / "run_pilot.ipynb"
+    path = REPO_ROOT / "colab" / "run_cycle.ipynb"
     nb = json.loads(path.read_text(encoding="utf-8"))
     src = "\n".join("".join(c["source"]) for c in nb["cells"])
     rev = re.findall(r'(?m)^NOTEBOOK_REV = "([^"]+)"', src)
@@ -238,7 +251,7 @@ def test_notebook_bootstraps_from_github_and_is_versioned():
     pin = re.search(r'PIN = "([^"]+)"', src).group(1)
     assert url.startswith("https://github.com/") and "<" not in url
     owner_repo = url.removeprefix("https://github.com/").removesuffix(".git")
-    link = f"https://colab.research.google.com/github/{owner_repo}/blob/{pin}/colab/run_pilot.ipynb"
+    link = f"https://colab.research.google.com/github/{owner_repo}/blob/{pin}/colab/run_cycle.ipynb"
     assert src.count(link) >= 2  # the "Open in Colab" link (cell 0) and cell 2's outdated-copy message
     assert "❌" in "".join(nb["cells"][2]["source"]) and "✅ code ready" in "".join(nb["cells"][2]["source"])
 

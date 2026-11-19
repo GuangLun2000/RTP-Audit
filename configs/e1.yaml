@@ -1,0 +1,56 @@
+# Instrument v2 (research objective v1118): content vs scale of brand preference.
+# Paired ladder items, measured on every model with the forced-position letter-logit readout.
+# Development models (`models`): the instrument may change while only these have been measured.
+# Confirmation models (`confirm_models`): outcome stages refuse them until the instrument is frozen.
+name: e1
+seed: 0
+data:
+  categories_file: data/seeds/categories.yaml
+  placebo_file: data/seeds/placebo_names.yaml
+  natural_negatives_file: data/seeds/natural_negatives.csv
+  # Same 18 categories x 18 real brands and the same brand-disjoint split as the pilot (test = 7 categories).
+  categories: ["running shoe", "sneaker", "backpack", "laptop", "smartphone", "camera", "television",
+               "vacuum cleaner", "printer", "blender", "coffee brand",
+               "watch", "beer", "snack brand", "electric car", "mattress", "soda", "shampoo"]
+  n_real_per_category: 18
+  n_placebo_per_category: 8  # all eight fictional choice names of the seed file: anchors and controls
+  # The legacy four-option family is still generated (the frozen white-box code reads it), at its smallest size.
+  evidence_levels: [0]
+  handicaps: [0]
+  cards_per_cell: 8
+  e0_pairs_per_substitute: 1
+  test_categories: ["watch", "beer", "snack brand", "electric car", "mattress", "soda", "shampoo"]
+  probe_entities_per_category: 8
+  probe_templates: 10
+ladder:
+  enabled: true
+  version: 1
+  rating_deltas: [0.1, 0.3, 0.6, 1.0, 2.0]   # stars
+  price_deltas: [0.05, 0.15, 0.4, 1.0]       # relative price increase
+  review_ratios: [2.0, 5.0, 20.0, 100.0]     # review count divided by
+  n_base: 2
+  direct_entities: 6
+  direct_controls: 4
+  favourable_levels: 2
+ladder_measure:
+  shard_size: 4000
+  diag_fraction: 0.1
+  gen_check_fraction: 0.02
+  gen_max_new_tokens: 4
+  n_samples: 8
+  max_batch_size: 64
+  max_batch_tokens: 32768
+open_set:
+  prompt_types: ["name", "recommend"]
+  eps: 1.0e-6
+  temperatures: [0.5, 0.7, 1.0, 1.4, 2.0]
+  n_samples: 50
+  max_new_tokens: 12
+models:
+  - allenai/Llama-3.1-Tulu-3-8B-SFT
+  - allenai/Llama-3.1-Tulu-3-8B-DPO
+confirm_models:
+  - allenai/Llama-3.1-Tulu-3-8B
+  - allenai/Olmo-3-7B-Instruct-SFT
+  - allenai/Olmo-3-7B-Instruct-DPO
+  - allenai/Olmo-3-7B-Instruct

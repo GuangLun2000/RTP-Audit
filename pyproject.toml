@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "rtp-audit"
 version = "0.1.0"
-description = "Detecting undisclosed brand promotion in open-weight LLMs without a clean base model."
+description = "Separating the content of a brand preference from its scale in open-weight LLMs (preference levels in evidence units)."
 readme = "README.md"
 requires-python = ">=3.10"
 # torch is deliberately NOT listed: use the torch that ships with the runtime (Colab). Never reinstall it.

@@ -57,7 +57,9 @@ def _imports(path: Path, own: str) -> set[str]:
     return found
 
 
-def import_closure(module: str) -> list[str]:
+def import_closure(module: str, stop: tuple[str, ...] = ()) -> list[str]:
+    """Every ``rtp`` module that ``module`` imports, transitively. Modules in ``stop`` are listed but their
+    own imports are NOT followed: what is reachable only through them is not part of the closure."""
     seen: set[str] = set()
     todo = [module]
     while todo:
@@ -66,7 +68,7 @@ def import_closure(module: str) -> list[str]:
             continue
         seen.add(name)
         path = _module_file(name)
-        if path is not None:
+        if path is not None and name not in stop:
             todo.extend(_imports(path, name) - seen)
     return sorted(m for m in seen if _module_file(m) is not None)
 
@@ -77,15 +79,18 @@ def _normalized_source(path: Path) -> bytes:
 
 
 @lru_cache(maxsize=None)
-def code_digest(module: str, exclude: tuple[str, ...] = ("rtp.config",), exclude_prefixes: tuple[str, ...] = ()) -> str:
+def code_digest(module: str, exclude: tuple[str, ...] = ("rtp.config",), exclude_prefixes: tuple[str, ...] = (),
+                stop: tuple[str, ...] = ()) -> str:
     """Digest of the source of ``module``'s import closure, minus plumbing, ``exclude`` and ``exclude_prefixes``.
+    ``stop``: modules whose imports are not followed (see ``import_closure``); excluding a module without
+    stopping at it still hashes everything it imports.
 
-    ``rtp.config`` is plumbing for model stages (its effect is the serialised settings) but NOT for data
-    generation, whose constants (e.g. HANDICAP_MIN_EVIDENCE) live there: pass ``exclude=()`` for the data hash.
+    ``rtp.config`` is plumbing: its effect is the serialised settings. The data generators' own constants
+    live in ``rtp.data.constants``, which the data hash covers.
     """
     h = hashlib.sha256()
     skip = (PLUMBING - {"rtp.config"}) | set(exclude)
-    for name in import_closure(module):
+    for name in import_closure(module, stop):
         if name in skip or any(name.startswith(p) for p in exclude_prefixes):
             continue
         path = _module_file(name)

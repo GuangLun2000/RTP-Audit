@@ -1,0 +1,32 @@
+# Cycle C1: Tulu 3 SFT -> DPO on the full instrument (develop phase; exploratory by construction:
+# this stage pair was already seen in the first pilot).
+name: c1
+config: configs/e1.yaml
+phase: develop
+question: >-
+  On Tulu 3 SFT -> DPO: do the four conditions of the instrument hold, do rating, price and review evidence
+  rescale by the same factor, and what is left of the name effects once that factor is removed? Does the
+  preference level depend on the choice set (two options vs four)?
+budget_hours: 6
+jobs:
+  - stage: ladder
+    tier: core
+    models: [allenai/Llama-3.1-Tulu-3-8B-SFT, allenai/Llama-3.1-Tulu-3-8B-DPO]
+  - stage: ladder
+    tier: ext
+    models: [allenai/Llama-3.1-Tulu-3-8B-SFT, allenai/Llama-3.1-Tulu-3-8B-DPO]
+  - stage: ladder
+    tier: ctx
+    models: [allenai/Llama-3.1-Tulu-3-8B-SFT, allenai/Llama-3.1-Tulu-3-8B-DPO]
+  - stage: open-set
+    models: [allenai/Llama-3.1-Tulu-3-8B-SFT, allenai/Llama-3.1-Tulu-3-8B-DPO]
+pairs:
+  - [allenai/Llama-3.1-Tulu-3-8B-SFT, allenai/Llama-3.1-Tulu-3-8B-DPO]
+decisions:
+  - "Keep the full-card and composite strata in the confirmation runs, or report the attribute-only stratum alone?"
+  - "Which preference level is primary for the confirmation phase (converted is the default; direct is the check)."
+  - "Is the instrument ready for the noise-band and planting cycles, or does it need another revision?"
+cut_order:
+  - "the four-option context tier"
+  - "open-set on both models"
+  - "the extension tier on DPO, then on SFT"

@@ -1,0 +1,18 @@
+# A cycle on the smoke model, for trying the `cycle` commands by hand (CPU is enough):
+#   python -m rtp.cli build-data --config configs/smoke.yaml
+#   python -m rtp.cli cycle run --cycle configs/cycles/smoke.yaml
+# `python -m rtp.cli smoke` builds the same cycle in code (it does not read this file) and adds its checks.
+name: smoke
+config: configs/smoke.yaml
+phase: develop
+question: >-
+  Does the pipeline run end to end, and does a pure scale change leave every preference level unchanged?
+budget_hours: 1
+jobs:
+  - stage: ladder
+    tier: core
+    models: [Qwen/Qwen2.5-0.5B-Instruct, "Qwen/Qwen2.5-0.5B-Instruct@scale=2"]
+  - stage: open-set
+    models: [Qwen/Qwen2.5-0.5B-Instruct]
+pairs:
+  - [Qwen/Qwen2.5-0.5B-Instruct, "Qwen/Qwen2.5-0.5B-Instruct@scale=2"]

@@ -1,4 +1,4 @@
-"""Helpers for colab/run_pilot.ipynb: run stages with live, readable output and keep a session history.
+"""Helpers for colab/run_cycle.ipynb: run stages with live, readable output and keep a session history.
 
 Keeping this logic in the package (not in notebook cells) means it is versioned, tested and improved
 together with the code: the notebook stays a thin, stable list of calls.
@@ -132,11 +132,15 @@ def gpu_overrides() -> list[str]:
     except Exception:  # noqa: BLE001
         return []
     if gib >= 120:  # H200 (141 GB)
-        sizes = {"measure.max_batch_size": 128, "measure.max_batch_tokens": 65536,
+        sizes = {"ladder_measure.max_batch_size": 192, "ladder_measure.max_batch_tokens": 65536,
+                 "open_set.max_batch_size": 128, "open_set.max_batch_tokens": 65536,
+                 "measure.max_batch_size": 128, "measure.max_batch_tokens": 65536,
                  "extract.max_batch_size": 64, "extract.max_batch_tokens": 32768,
                  "localize.max_batch_size": 96, "localize.max_batch_tokens": 49152}
     elif gib >= 76:  # 96 GB class (e.g. G4 / RTX PRO 6000) and 80 GB A100/H100 (~79 GiB usable)
-        sizes = {"measure.max_batch_size": 96, "measure.max_batch_tokens": 49152,
+        sizes = {"ladder_measure.max_batch_size": 128, "ladder_measure.max_batch_tokens": 49152,
+                 "open_set.max_batch_size": 96, "open_set.max_batch_tokens": 49152,
+                 "measure.max_batch_size": 96, "measure.max_batch_tokens": 49152,
                  "extract.max_batch_size": 48, "extract.max_batch_tokens": 24576,
                  "localize.max_batch_size": 64, "localize.max_batch_tokens": 32768}
     else:
@@ -145,6 +149,19 @@ def gpu_overrides() -> list[str]:
     for k, v in sizes.items():
         out += ["--set", f"{k}={v}"]
     return out
+
+
+def config_name(config: str) -> str:
+    """The run name of a config file (its directory under ``runs/``)."""
+    from rtp.config import load_config
+
+    return load_config(config).name
+
+
+def cycle_name(cycle: str) -> str:
+    from rtp.cycle import load_cycle
+
+    return load_cycle(cycle).name
 
 
 def show(path: str | Path, max_chars: int = 20000) -> None:

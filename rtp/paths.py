@@ -55,12 +55,16 @@ def data_dir(config_name: str) -> Path:
 
 
 def model_slug(model_id: str) -> str:
-    """Filesystem-safe slug. Hub IDs map 'org/name' -> 'org__name'; local paths get a short hash suffix."""
+    """Filesystem-safe slug. Hub IDs map 'org/name' -> 'org__name'; local paths and model variants
+    ('<id>@scale=2', 'zoo:<run>') get a short hash suffix, so two different ids never share a directory."""
     if os.path.exists(model_id):
         p = Path(model_id).resolve()
         digest = hashlib.sha256(str(p).encode()).hexdigest()[:8]
         return f"local__{re.sub(r'[^A-Za-z0-9._-]+', '_', p.name)}__{digest}"
-    return re.sub(r"[^A-Za-z0-9._-]+", "_", model_id.replace("/", "__"))
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "_", model_id.replace("/", "__"))
+    if "@" in model_id or ":" in model_id:
+        slug += "__" + hashlib.sha256(model_id.encode()).hexdigest()[:8]
+    return slug
 
 
 def stage_dir(config_name: str, model_id: str, stage: str) -> Path:

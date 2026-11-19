@@ -48,7 +48,7 @@ LETTERS = ("A", "B", "C", "D")
 EPS = 1e-4
 LETTER_FORMS = ("{L}", " {L}", "**{L}", " **{L}", "({L}", " ({L}")
 NAME_FORMS = ("{n}", " {n}", "**{n}", " **{n}")
-N_CLASSES = 5  # options A-D + identity leak
+N_CLASSES = 5  # four-option items: options A-D + identity leak (N-option items: N + 1 classes, leak last)
 LEAK = 4
 
 
@@ -85,22 +85,46 @@ def build_item_paths(tokenizer: Any, names: Sequence[str], leak_name: str | None
             cache[s] = tuple(tokenizer(s, add_special_tokens=False)["input_ids"])
         return cache[s]
 
-    classes: list[list[tuple[tuple[int, ...], str]]] = [[] for _ in range(N_CLASSES)]
-    for j, L in enumerate(LETTERS):
+    n = len(names)  # options are lettered A.. in order; the leak class comes last
+    if not 2 <= n <= len(LETTERS):
+        raise ValueError(f"items need 2-{len(LETTERS)} options, got {n}")
+    classes: list[list[tuple[tuple[int, ...], str]]] = [[] for _ in range(n + 1)]
+    for j, L in enumerate(LETTERS[:n]):
         seqs = {toks(f.format(L=L)) for f in LETTER_FORMS} | {(i,) for i in letter_ids[L]}
         classes[j].extend((s, "letter") for s in seqs if s)
         classes[j].extend((toks(f.format(n=names[j])), "name") for f in NAME_FORMS if toks(f.format(n=names[j])))
     if leak_name:
-        classes[LEAK].extend((toks(f.format(n=leak_name)), "name") for f in NAME_FORMS if toks(f.format(n=leak_name)))
-    for c in range(N_CLASSES):  # drop paths that extend a shorter path of the same class (already counted)
-        uniq = sorted(set(classes[c]), key=lambda pk: (len(pk[0]), pk[0]))
-        kept: list[tuple[tuple[int, ...], str]] = []
-        for p, k in uniq:
-            if not any(p[: len(q)] == q for q, _ in kept):
-                kept.append((p, k))
-        classes[c] = kept
+        classes[n].extend((toks(f.format(n=leak_name)), "name") for f in NAME_FORMS if toks(f.format(n=leak_name)))
+    classes = [_dedup_prefix(c) for c in classes]
     a_letter = {p for p, k in classes[0] if k == "letter"}
     return ItemPaths(classes=classes, a_letter=a_letter)
+
+
+def _dedup_prefix(paths: list[tuple[tuple[int, ...], str]]) -> list[tuple[tuple[int, ...], str]]:
+    """Drop paths that extend a shorter path of the same class (their mass is already counted)."""
+    kept: list[tuple[tuple[int, ...], str]] = []
+    for p, k in sorted(set(paths), key=lambda pk: (len(pk[0]), pk[0])):
+        if not any(p[: len(q)] == q for q, _ in kept):
+            kept.append((p, k))
+    return kept
+
+
+def build_name_paths(tokenizer: Any, class_names: Sequence[Sequence[str]],
+                     cache: dict[str, tuple[int, ...]]) -> ItemPaths:
+    """Answer paths for an OPEN question whose answer is a name: one class per entity, holding the name
+    forms of all its spellings (canonical name and aliases). No letters, no leak class. Used for the
+    closed-set brand distribution (rtp.measure.open_set); a name that extends another entity's name
+    ("Google Pixel" vs "Google") is handled by the event masses, as for options."""
+    def toks(s: str) -> tuple[int, ...]:
+        if s not in cache:
+            cache[s] = tuple(tokenizer(s, add_special_tokens=False)["input_ids"])
+        return cache[s]
+
+    classes = []
+    for spellings in class_names:
+        paths = [(toks(f.format(n=name)), "name") for name in spellings for f in NAME_FORMS if toks(f.format(n=name))]
+        classes.append(_dedup_prefix(paths))
+    return ItemPaths(classes=classes, a_letter=set())
 
 
 def needed_nodes(paths: ItemPaths) -> tuple[set[tuple[int, ...]], dict[tuple[int, ...], set[int]]]:
@@ -118,11 +142,11 @@ def needed_nodes(paths: ItemPaths) -> tuple[set[tuple[int, ...]], dict[tuple[int
 
 def event_masses(paths: ItemPaths, logmass: dict[tuple[int, ...], float], article: dict[tuple[int, ...], float],
                  art_set: frozenset[int] | set[int] = frozenset()) -> tuple[np.ndarray, np.ndarray, float]:
-    """(q per class [5], name-channel mass per class [5], article mass removed from option A) from path
+    """(q per class, name-channel mass per class, article mass removed from option A) from path
     log-masses (missing = pruned = 0). ``art_set``: token ids counted as the article after a bare "A"."""
     allp = [(c, p, k) for c, cls in enumerate(paths.classes) for p, k in cls]
-    q = np.zeros(N_CLASSES)
-    qn = np.zeros(N_CLASSES)
+    q = np.zeros(len(paths.classes))
+    qn = np.zeros(len(paths.classes))
     art_removed = 0.0
     for c, p, kind in allp:
         if p not in logmass:
@@ -147,15 +171,15 @@ def event_masses(paths: ItemPaths, logmass: dict[tuple[int, ...], float], articl
 
 @dataclass
 class PositionResult:
-    q: np.ndarray        # [5] event mass per class (A-D, leak)
-    q_name: np.ndarray   # [5] of which through name paths (a name whose first token is its own option's
+    q: np.ndarray        # [n classes] event mass per class (four-option items: A-D, leak)
+    q_name: np.ndarray   # of which through name paths (a name whose first token is its own option's
     #                      letter token, "D"+"ell" at D, is counted as a letter answer)
     pruned: float        # mass of pruned frontier prefixes (upper bound on missed answer mass)
     article: float = 0.0  # mass of "A" + article word removed from option A
 
 
 def batched_tries(all_paths: Sequence[ItemPaths], root_lps: np.ndarray, expand_batch,
-                  art_set: frozenset[int] | set[int] = frozenset()) -> list[PositionResult]:
+                  art_set: frozenset[int] | set[int] = frozenset(), eps: float = EPS) -> list[PositionResult]:
     """Breadth-first trie evaluation for MANY items at one position. ``expand_batch(todo)`` takes a list of
     (row, node) and returns, per entry, (dict next-token -> logprob for the needed children, article mass).
     All items' nodes of one depth are expanded together, so the number of forward passes is the trie depth."""
@@ -178,7 +202,7 @@ def batched_tries(all_paths: Sequence[ItemPaths], root_lps: np.ndarray, expand_b
                     continue
                 any_frontier = True
                 mass = float(np.exp(logmass[r][node]))
-                if mass >= EPS:
+                if mass >= eps:
                     todo.append((r, node))
                 else:
                     pruned[r] += mass
@@ -264,7 +288,7 @@ def _expand_rows(lm: LoadedModel, cache: Any, mask: torch.Tensor, prefixes: list
 @torch.inference_mode()
 def answer_distributions(lm: LoadedModel, free_ids: Sequence[Sequence[int]], forced_ids: Sequence[Sequence[int]],
                          paths: Sequence[ItemPaths], max_batch_size: int, max_batch_tokens: int,
-                         patches_for=None, node_chunk: int = 64) -> list[dict[str, PositionResult]]:
+                         patches_for=None, node_chunk: int = 64, eps: float = EPS) -> list[dict[str, PositionResult]]:
     """Per item {"free": PositionResult, "forced": PositionResult}.
 
     ``patches_for(batch_indices, padded_len, left_offsets)`` may return patches (see rtp.patching) that are
@@ -298,7 +322,7 @@ def answer_distributions(lm: LoadedModel, free_ids: Sequence[Sequence[int]], for
             def expand_batch(todo, needs, keep=keep, prefixes=prefixes):  # extensions are never patched
                 return _expand_rows(lm, cache, mask, prefixes, keep, todo, needs, art_ids, node_chunk,
                                     allow_fallback=not patches)
-            res[position] = batched_tries([paths[i] for i in batch], logp[:, k, :], expand_batch, art_set)
+            res[position] = batched_tries([paths[i] for i in batch], logp[:, k, :], expand_batch, art_set, eps)
         return [{"free": res["free"][r], "forced": res["forced"][r]} for r in range(len(batch))]
 
     def fn(batch: list[int]) -> list[dict[str, PositionResult]]:
@@ -323,19 +347,21 @@ def logit(p: np.ndarray | float, eps: float = 1e-4) -> np.ndarray:
 
 
 def estimators(free: PositionResult, forced: PositionResult, target: int) -> dict[str, float]:
-    """O5 (primary), O3, O4 for one item, plus coverage, channels, leak, bounds."""
-    qf, qx = free.q[:4], forced.q[:4]
+    """O5, O3, O4 for one item, plus coverage, channels, leak, bounds. The last class is the identity leak;
+    the classes before it are the item's options (four for the legacy family, two for binary ladder items)."""
+    n = len(free.q) - 1
+    qf, qx = free.q[:n], forced.q[:n]
     cf, cx = float(qf.sum()), float(qx.sum())
-    o3 = qf / cf if cf > 0 else np.full(4, 0.25)
-    o4 = qx / cx if cx > 0 else np.full(4, 0.25)
+    o3 = qf / cf if cf > 0 else np.full(n, 1.0 / n)
+    o4 = qx / cx if cx > 0 else np.full(n, 1.0 / n)
     p = qf + (1.0 - min(cf, 1.0)) * o4
-    p = p / p.sum() if p.sum() > 0 else np.full(4, 0.25)
+    p = p / p.sum() if p.sum() > 0 else np.full(n, 1.0 / n)
     lo, hi = float(qf[target]), float(qf[target] + max(0.0, 1.0 - cf))
     return {"P": p, "s_target": float(logit(p[target])), "s_target_free": float(logit(o3[target])),
             "s_target_forced": float(logit(o4[target])), "c_free": cf, "c_forced": cx,
             "s_target_lo": float(logit(lo)), "s_target_hi": float(logit(hi)),
             "target_mass_free": float(qf[target]), "target_name_free": float(free.q_name[target]),
-            "name_share_free": float(free.q_name[:4].sum() / cf) if cf > 0 else float("nan"),
-            "name_share_forced": float(forced.q_name[:4].sum() / cx) if cx > 0 else float("nan"),
-            "leak_free": float(free.q[LEAK]), "leak_forced": float(forced.q[LEAK]),
+            "name_share_free": float(free.q_name[:n].sum() / cf) if cf > 0 else float("nan"),
+            "name_share_forced": float(forced.q_name[:n].sum() / cx) if cx > 0 else float("nan"),
+            "leak_free": float(free.q[n]), "leak_forced": float(forced.q[n]),
             "article_free": float(free.article), "pruned_free": free.pruned, "pruned_forced": forced.pruned}

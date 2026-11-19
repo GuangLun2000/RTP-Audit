@@ -1,7 +1,8 @@
 """Model/tokenizer loading, prompt formatting via the tokenizer's own chat template, layer access.
 
-Hard constraint 1 (spec §2): ``load_model`` takes exactly ONE model path. There is no
-parameter for loading a base model alongside it, and none must be added.
+Hard constraint 1: ``load_model`` takes exactly ONE model id and loads one model. There is no parameter
+for loading a second model alongside it, and none must be added. A variant id (rtp.variants) is still
+one model: a registered checkpoint with a logit scale and/or one LoRA adapter applied to it.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ class LoadedModel:
     is_chat: bool
     device: Any
     template_kwargs: dict[str, Any] = field(default_factory=dict)  # from the registry (e.g. Qwen3 thinking off)
+    logit_scale: float = 1.0  # variant "@scale=c": every output logit is multiplied by c (hook on the output head)
 
 PROMPT_MODES = ("auto", "chat", "base")
 
@@ -52,6 +54,7 @@ def _explain_load_failure(model_path: str, exc: BaseException) -> ModelLoadError
 
 
 def _validate_unverified(model_path: str) -> None:
+    model_path = registry.base_model_id(model_path)
     spec = registry.get_model_spec(model_path)
     if spec is None or spec.verified or _is_local(model_path):
         return
@@ -64,6 +67,27 @@ def _validate_unverified(model_path: str) -> None:
         registry.validate_repo_id(model_path, "model")
     except registry.RegistryError as exc:
         raise ModelLoadError(str(exc)) from exc
+
+
+def is_cached(model_path: str) -> bool:
+    """True if the checkpoint's weights are on local disk already (a local path, or a complete snapshot of the
+    pinned revision in the Hugging Face cache). Used to price a load: on Colab the cache is on the VM's disk
+    and is empty again in every new session."""
+    base = registry.base_model_id(model_path)
+    if _is_local(base):
+        return True
+    try:
+        from pathlib import Path
+
+        from huggingface_hub import try_to_load_from_cache
+
+        hit = try_to_load_from_cache(base, "config.json", **_revision_kwargs(model_path))
+        if not isinstance(hit, str):
+            return False
+        snapshot = Path(hit).parent  # weight files appear here (as links) only once fully downloaded
+        return any(snapshot.glob("*.safetensors")) or any(snapshot.glob("*.bin"))
+    except Exception:  # noqa: BLE001 - a cache probe must never break a plan
+        return False
 
 
 def _revision_kwargs(model_path: str) -> dict[str, str]:
@@ -103,25 +127,42 @@ def load_tokenizer(model_path: str) -> Any:
     from transformers import AutoTokenizer
 
     _validate_unverified(model_path)
+    base = registry.base_model_id(model_path)
     try:
-        tok = AutoTokenizer.from_pretrained(model_path, **_revision_kwargs(model_path))
+        tok = AutoTokenizer.from_pretrained(base, **_revision_kwargs(model_path))
     except Exception as exc:  # noqa: BLE001 - re-raised with a clear message
-        raise _explain_load_failure(model_path, exc) from exc
+        raise _explain_load_failure(base, exc) from exc
     if tok.pad_token_id is None:
         tok.pad_token = tok.eos_token
     tok.padding_side = "left"
     return tok
 
 
+def scale_logits(model: Any, scale: float) -> Any:
+    """Multiply every output logit of ``model`` by ``scale`` (a hook on the output head; returns its handle).
+
+    The product is formed in float32: in bfloat16 a multiplication by a constant that is not a power of
+    two rounds each logit differently, which would add noise to a change that must be an exact rescaling.
+    The hook acts on forward passes and on ``generate`` alike.
+    """
+    head = model.get_output_embeddings()
+    if head is None:
+        raise ModelLoadError(f"{type(model).__name__} has no output embedding to scale")
+    return head.register_forward_hook(lambda module, inputs, output: output.float() * scale)
+
+
 def load_model(model_path: str) -> LoadedModel:
     """Load one causal LM and its tokenizer.
 
     CUDA: bfloat16 on ``device_map={"": 0}`` (spec §3). Without CUDA (unit/integration tests
-    on a laptop) the model is loaded in float32 on CPU.
+    on a laptop) the model is loaded in float32 on CPU. For a variant id the base checkpoint is loaded
+    and the variant's adapter and logit scale are applied to it.
     """
     import torch
     from transformers import AutoModelForCausalLM
 
+    variant = registry.get_model_spec(model_path)
+    base = registry.base_model_id(model_path)
     tok = load_tokenizer(model_path)
     if torch.cuda.is_available():
         kwargs: dict[str, Any] = {"dtype": torch.bfloat16, "device_map": {"": 0}}
@@ -131,12 +172,28 @@ def load_model(model_path: str) -> LoadedModel:
         device = torch.device("cpu")
         log.warning("CUDA not available: loading '%s' in float32 on CPU", model_path)
     try:
-        model = AutoModelForCausalLM.from_pretrained(model_path, **kwargs, **_revision_kwargs(model_path))
+        model = AutoModelForCausalLM.from_pretrained(base, **kwargs, **_revision_kwargs(model_path))
     except Exception as exc:  # noqa: BLE001
-        raise _explain_load_failure(model_path, exc) from exc
+        raise _explain_load_failure(base, exc) from exc
     if device.type == "cpu":
         model.to(device)
+    if variant is not None and variant.adapter:
+        from rtp import variants
+
+        # load_adapter keeps the model's own class (no PeftModel wrapper), so layer access is unchanged
+        model.load_adapter(str(variants.verified_adapter_dir(variant.adapter)))
+        head = model.get_output_embeddings()
+        if any("lora" in name.lower() for name, _ in head.named_modules() if name):
+            # the letter readout recomputes logits from the head's own weight (rtp.measure.ladder); an adapter
+            # on the head would be left out of them without any error
+            raise ModelLoadError(f"adapter '{variant.adapter}' modifies the output head of {base}; train adapters "
+                                 f"on the transformer blocks only (no lm_head in target_modules)")
+        log.info("loaded adapter '%s' (sha256 %s) on %s", variant.adapter, (variant.adapter_sha256 or "")[:12], base)
     model.eval()
+    scale = variant.logit_scale if variant is not None else 1.0
+    if scale != 1.0:
+        scale_logits(model, scale)
+        log.info("output logits of %s are multiplied by %g", base, scale)
     chat = is_chat_model(model_path, tok)
     spec = registry.get_model_spec(model_path)
     template_kwargs = dict(spec.chat_template_kwargs) if spec is not None else {}
@@ -147,7 +204,7 @@ def load_model(model_path: str) -> LoadedModel:
     log.info("loaded %s (%s, chat=%s, template kwargs=%s, %d blocks)", model_path, next(model.parameters()).dtype,
              chat, template_kwargs, len(get_blocks(model)))
     return LoadedModel(model=model, tokenizer=tok, model_id=model_path, is_chat=chat, device=device,
-                       template_kwargs=template_kwargs)
+                       template_kwargs=template_kwargs, logit_scale=scale)
 
 
 # --------------------------------------------------------------------------- prompts

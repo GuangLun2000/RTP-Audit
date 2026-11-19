@@ -17,11 +17,10 @@ from typing import Any
 
 import yaml
 
+from rtp.data.constants import EVIDENCE_LEVELS, HANDICAP_MIN_EVIDENCE, HANDICAPS  # noqa: F401 (re-exported)
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-EVIDENCE_LEVELS = (0, 1, 2, 3, 4)
-HANDICAPS = (0, 1, 2, 3, 4)
-HANDICAP_MIN_EVIDENCE = 3  # spec 7.1: handicap only applies when ratings are shown (evidence >= 3)
 OPEN_ENDED_PROMPT_TYPES = ("name", "choose", "recommend", "pick")
 PROBE_FRAMES = ("background", "choice")
 
@@ -114,16 +113,65 @@ class LocalizeConfig:
 
 
 @dataclass
+class LadderConfig:
+    """Instrument v2: paired items "target vs one fictional control" with an evidence ladder (rtp.data.ladder_items).
+
+    Part of the data hash. ``d`` is the adverse-evidence level: at level k of a type the disadvantaged option
+    is worse by the k-th entry of that type's list (d > 0: the target; d < 0: the control). The lists are in
+    natural units, so a preference level can be reported as "worth 0.6 stars" or "a 15% price premium".
+    """
+    enabled: bool = False
+    version: int = 1  # bump with every change of the instrument in the develop phase (one line in DECISIONS.md)
+    rating_deltas: list[float] = field(default_factory=lambda: [0.1, 0.3, 0.6, 1.0, 2.0])  # stars removed
+    price_deltas: list[float] = field(default_factory=lambda: [0.05, 0.15, 0.4, 1.0])  # relative price increase
+    review_ratios: list[float] = field(default_factory=lambda: [2.0, 5.0, 20.0, 100.0])  # review count divided by
+    n_base: int = 2  # base value sets (rating, price, review count) per category in the attribute-only stratum
+    direct_entities: int = 6  # real brands per category that also get items at d != 0 (direct reading of theta)
+    direct_controls: int = 4  # fictional controls used for those items and for the four-option context arm
+    favourable_levels: int = 2  # levels on the favourable side (d = -1 .. -k) for those real brands
+
+
+@dataclass
+class LadderMeasureConfig:
+    """The ``ladder`` stage (rtp.measure.ladder): letter logits on every item, diagnostics on a sample."""
+    shard_size: int = 4000
+    diag_fraction: float = 0.1  # items also scored with answer paths at both positions (readout validity)
+    gen_check_fraction: float = 0.02  # items whose free answer is decoded (greedy, plus n_samples sampled)
+    gen_max_new_tokens: int = 4
+    n_samples: int = 8  # sampled free answers per checked item at temperature 1 (0 = greedy only)
+    max_batch_size: int = 64
+    max_batch_tokens: int = 32768
+
+
+@dataclass
+class OpenSetConfig:
+    """The ``open-set`` stage (rtp.measure.open_set): closed-set brand distribution of an open question."""
+    prompt_types: list[str] = field(default_factory=lambda: ["name", "recommend"])
+    eps: float = 1e-6  # answer-path prefixes below this mass are pruned (their mass is reported)
+    temperatures: list[float] = field(default_factory=lambda: [0.5, 0.7, 1.0, 1.4, 2.0])  # sampled answers
+    n_samples: int = 50  # per (category, prompt type, temperature); 0 = no sampling
+    max_new_tokens: int = 12
+    max_batch_size: int = 64
+    max_batch_tokens: int = 32768
+
+
+@dataclass
 class Config:
     name: str
     seed: int = 0
     data: DataConfig = field(default_factory=DataConfig)
+    ladder: LadderConfig = field(default_factory=LadderConfig)
+    ladder_measure: LadderMeasureConfig = field(default_factory=LadderMeasureConfig)
+    open_set: OpenSetConfig = field(default_factory=OpenSetConfig)
     measure: MeasureConfig = field(default_factory=MeasureConfig)
     open_ended: OpenEndedConfig = field(default_factory=OpenEndedConfig)
     extract: ExtractConfig = field(default_factory=ExtractConfig)
     probe: ProbeConfig = field(default_factory=ProbeConfig)
     localize: LocalizeConfig = field(default_factory=LocalizeConfig)
     models: list[str] = field(default_factory=list)
+    # Models whose outcomes stay unseen until the instrument is frozen (confirmation phase). Outcome stages
+    # refuse them before the freeze; see docs/AGENT_LOOP.md.
+    confirm_models: list[str] = field(default_factory=list)
     source_path: str | None = None  # not part of the hash
 
     # ------------------------------------------------------------------ helpers
@@ -144,12 +192,21 @@ class Config:
         """Seed + data section + the CONTENT of the seed files (review flags excluded) + generator code.
 
         Editing a brand, alias, range or placebo name, or the generator code, changes the hash;
-        ticking ``needs_review`` / ``needs_web_check`` after a review does not.
+        ticking ``needs_review`` / ``needs_web_check`` after a review does not. ``rtp.config`` and
+        ``rtp.registry`` are not part of the generator code (its constants live in ``rtp.data.constants``;
+        every data setting is serialised above), so editing a model entry never forces a data rebuild.
         """
         from rtp.provenance import code_digest
 
-        return _hash({"seed": self.seed, "data": dataclasses.asdict(self.data), "seed_files": self.seed_file_digests(),
-                      "code": code_digest("rtp.data.build", exclude=())})
+        outside = ("rtp.config", "rtp.registry")  # not generator code; stop there, so their imports stay out too
+        parts = {"seed": self.seed, "data": dataclasses.asdict(self.data), "seed_files": self.seed_file_digests(),
+                 "code": code_digest("rtp.data.build", exclude=outside, exclude_prefixes=("rtp.data.ladder",),
+                                     stop=outside)}
+        if self.ladder.enabled:  # the ladder family has its own generator AND validator code, and its settings
+            parts["ladder"] = dataclasses.asdict(self.ladder)
+            parts["ladder_code"] = [code_digest(m, exclude=outside, stop=outside)
+                                    for m in ("rtp.data.ladder_items", "rtp.data.ladder_schema")]
+        return _hash(parts)
 
     def seed_file_digests(self) -> dict[str, str]:
         d = self.data
@@ -168,7 +225,8 @@ class Config:
         """
         section = dataclasses.asdict({"measure": self.measure, "open_ended": self.open_ended,
                                       "extract": self.extract, "probe": self.probe,
-                                      "localize": self.localize}[stage])
+                                      "localize": self.localize, "ladder": self.ladder_measure,
+                                      "open_set": self.open_set}[stage])
         for k in ("max_batch_size", "max_batch_tokens", "units_per_batch"):  # only reorder work: allow resuming
             section.pop(k, None)
         if stage == "open_ended":
@@ -237,7 +295,8 @@ def _build(cls, raw: dict[str, Any] | None, where: str):
 def config_from_dict(raw: dict[str, Any], source_path: str | None = None) -> Config:
     if not isinstance(raw, dict):
         raise ConfigError("config root must be a mapping")
-    allowed = {"name", "seed", "data", "measure", "open_ended", "extract", "probe", "localize", "models"}
+    allowed = {"name", "seed", "data", "ladder", "ladder_measure", "open_set", "measure", "open_ended", "extract",
+               "probe", "localize", "models", "confirm_models"}
     unknown = sorted(set(raw) - allowed)
     if unknown:
         raise ConfigError(f"unknown top-level key(s): {unknown}; allowed: {sorted(allowed)}")
@@ -247,12 +306,16 @@ def config_from_dict(raw: dict[str, Any], source_path: str | None = None) -> Con
         name=raw["name"],
         seed=raw.get("seed", 0),
         data=_build(DataConfig, raw.get("data"), "data"),
+        ladder=_build(LadderConfig, raw.get("ladder"), "ladder"),
+        ladder_measure=_build(LadderMeasureConfig, raw.get("ladder_measure"), "ladder_measure"),
+        open_set=_build(OpenSetConfig, raw.get("open_set"), "open_set"),
         measure=_build(MeasureConfig, raw.get("measure"), "measure"),
         open_ended=_build(OpenEndedConfig, raw.get("open_ended"), "open_ended"),
         extract=_build(ExtractConfig, raw.get("extract"), "extract"),
         probe=_build(ProbeConfig, raw.get("probe"), "probe"),
         localize=_build(LocalizeConfig, raw.get("localize"), "localize"),
         models=list(raw.get("models") or []),
+        confirm_models=list(raw.get("confirm_models") or []),
         source_path=source_path,
     )
     validate(cfg)
@@ -269,6 +332,10 @@ def apply_overrides(cfg: Config, sets: list[str] | None) -> Config:
             raise ConfigError(f"--set expects SECTION.KEY=VALUE, got '{item}'")
         key, value = item.split("=", 1)
         parts = key.strip().split(".")
+        if parts[0] in ("models", "confirm_models"):
+            # these lists decide which models may be measured before the instrument is frozen (rtp.phase)
+            raise ConfigError(f"--set cannot override '{parts[0]}': the model lists of a config are edited in its "
+                              f"YAML file, in a commit")
         node = raw
         for part in parts[:-1]:
             if part not in node or not isinstance(node[part], dict):
@@ -314,7 +381,8 @@ def _check_types(cfg: Config, need) -> None:
         got = kind(v)
         return got == want or (want == "float" and got == "int")
 
-    for sec_name in ("data", "measure", "open_ended", "extract", "probe", "localize"):
+    for sec_name in ("data", "ladder", "ladder_measure", "open_set", "measure", "open_ended", "extract", "probe",
+                     "localize"):
         sec = getattr(cfg, sec_name)
         for f in dataclasses.fields(sec):
             default = f.default if f.default is not dataclasses.MISSING else (
@@ -371,6 +439,34 @@ def validate(cfg: Config) -> None:
          f"open_ended.prompt_types must be a non-empty subset of {list(OPEN_ENDED_PROMPT_TYPES)}")
     need(o.n_samples >= 1 and o.max_new_tokens >= 1 and o.temperature > 0, "bad open_ended sampling settings")
     need(all(isinstance(x, str) and x for x in cfg.models), "models must be a list of non-empty strings")
+    need(all(isinstance(x, str) and x for x in cfg.confirm_models), "confirm_models must be a list of non-empty strings")
+    need(not set(cfg.models) & set(cfg.confirm_models), "a model cannot be in both models and confirm_models")
+    from rtp.registry import CONFIRMATION_MODELS, base_model_id
+
+    held = sorted(m for m in cfg.models if base_model_id(m) in CONFIRMATION_MODELS)
+    need(not held, f"models lists confirmation model(s) {held}: they are measured only after the instrument is "
+                   f"frozen (rtp/registry.py CONFIRMATION_MODELS); list them under confirm_models")
+    ld = cfg.ladder
+    for key, floor in (("rating_deltas", 0.0), ("price_deltas", 0.0), ("review_ratios", 1.0)):
+        v = getattr(ld, key)
+        need(len(v) >= 1 and all(x > floor for x in v) and all(a < b for a, b in zip(v, v[1:])),
+             f"ladder.{key} must be a non-empty, strictly increasing list of values > {floor:g}")
+    need(ld.version >= 1 and ld.n_base >= 1 and ld.direct_entities >= 0 and ld.direct_controls >= 1
+         and ld.favourable_levels >= 0, "bad ladder sizes")
+    need(ld.favourable_levels <= min(len(ld.rating_deltas), len(ld.price_deltas), len(ld.review_ratios)),
+         "ladder.favourable_levels cannot exceed the shortest ladder")
+    if ld.enabled:
+        need(d.n_placebo_per_category >= 3, "the ladder family needs data.n_placebo_per_category >= 3 fictional names")
+    lm_ = cfg.ladder_measure
+    need(lm_.shard_size >= 1 and lm_.max_batch_size >= 1 and lm_.max_batch_tokens >= 1 and lm_.gen_max_new_tokens >= 1
+         and lm_.n_samples >= 0, "bad ladder_measure sizes")
+    need(0.0 <= lm_.diag_fraction <= 1.0 and 0.0 <= lm_.gen_check_fraction <= 1.0,
+         "ladder_measure fractions must be in [0, 1]")
+    os_ = cfg.open_set
+    need(len(os_.prompt_types) > 0 and set(os_.prompt_types) <= {"name", "choose", "recommend"},
+         "open_set.prompt_types must be a non-empty subset of ['name', 'choose', 'recommend']")
+    need(0 < os_.eps < 1 and all(t > 0 for t in os_.temperatures) and os_.n_samples >= 0 and os_.max_new_tokens >= 1
+         and os_.max_batch_size >= 1 and os_.max_batch_tokens >= 1, "bad open_set settings")
     need(len(d.probe_frames) > 0 and set(d.probe_frames) <= set(PROBE_FRAMES),
          f"data.probe_frames must be a non-empty subset of {list(PROBE_FRAMES)}")
     x = cfg.extract
