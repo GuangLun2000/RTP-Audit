@@ -136,8 +136,10 @@ def test_notebook_covers_a_cycle_session():
                    '"pip", "install", "-q", "-e", ".[dev]"', 'nb.run("smoke")', "nb.pytest(", '"build-data"',
                    'nb.run("cycle", "plan", "--cycle", CYCLE, *REDO, strict=True)',
                    'nb.run("cycle", "run", "--cycle", CYCLE, *REDO)', "AFTER_INSTRUMENT_CHANGE = False",
-                   "scorecard.md", "nb.feedback(CONFIG)", "doctor"):
+                   "scorecard.md", "nb.feedback(CONFIG)", "doctor", "RELEASE_GPU_WHEN_DONE = True"):
         assert needle in src, needle
+    last = "".join(nb["cells"][-1]["source"])  # the session ends itself: the GPU is not left running after a cycle
+    assert "if RELEASE_GPU_WHEN_DONE:" in last and "nb.release_gpu(wait_seconds=10)" in last
     code = "\n".join("".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code")
     for frozen in ('"extract"', '"probe"', '"localize"', '"measure"'):
         assert frozen not in code, frozen
@@ -269,3 +271,26 @@ def test_stage_processes_do_not_load_tensorflow():
     out = subprocess.run([sys.executable, "-c", "import os, rtp.cli; print(os.environ['USE_TF'], os.environ['USE_FLAX'])"],
                          capture_output=True, text=True, env=env, check=True).stdout.split()
     assert out == ["0", "0"]
+
+
+def test_release_gpu_waits_syncs_drive_then_unassigns_and_keeps_local_results(monkeypatch, tmp_path):
+    import sys
+    import types
+
+    from rtp import notebook
+
+    monkeypatch.setenv("RTP_WORK_DIR", str(tmp_path))
+    monkeypatch.setitem(sys.modules, "google.colab", None)  # not on Colab
+    assert notebook.release_gpu(wait_seconds=0) is False
+    calls: list[str] = []
+    colab = types.ModuleType("google.colab")
+    colab.drive = types.SimpleNamespace(flush_and_unmount=lambda: calls.append("flush"))
+    colab.runtime = types.SimpleNamespace(unassign=lambda: calls.append("unassign"))
+    monkeypatch.setitem(sys.modules, "google", types.ModuleType("google"))
+    monkeypatch.setitem(sys.modules, "google.colab", colab)
+    monkeypatch.setattr("time.sleep", lambda s: calls.append(f"sleep {s:g}"))
+    assert notebook.release_gpu(wait_seconds=10) is False and calls == []  # results on the local disk: session kept
+    assert notebook.release_gpu(wait_seconds=10, force=True) is True and calls == ["sleep 10", "unassign"]
+    calls.clear()
+    monkeypatch.setattr("rtp.paths.work_dir", lambda: __import__("pathlib").Path("/content/drive/MyDrive/rtp"))
+    assert notebook.release_gpu(wait_seconds=10) is True and calls == ["sleep 10", "flush", "unassign"]

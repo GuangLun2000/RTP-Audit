@@ -205,6 +205,35 @@ def feedback(config: str) -> Path | None:
     return latest
 
 
+def release_gpu(wait_seconds: float = 10.0, force: bool = False) -> bool:
+    """End the Colab session so the GPU is released: wait ``wait_seconds`` (the browser finishes downloading
+    the feedback bundle), let Drive finish writing, then unassign the runtime. Everything on the VM's local
+    disk is lost, so the session is kept when the results are not on Drive, unless ``force``. Returns False
+    when nothing was released (not on Colab, or results only on the local disk)."""
+    import time
+
+    from rtp.paths import work_dir
+
+    try:
+        from google.colab import drive, runtime
+    except ImportError:
+        print("not on Colab: no runtime to release")
+        return False
+    on_drive = str(work_dir()).startswith("/content/drive")
+    if not on_drive and not force:
+        print(f"⚠️ GPU NOT released: the results are in {work_dir()} on the VM's local disk and would be lost. "
+              f"Copy them first, or call nb.release_gpu(force=True).")
+        return False
+    print(f"all cells finished; releasing the GPU in {wait_seconds:g} s (interrupt this cell to keep the session)")
+    time.sleep(wait_seconds)
+    if on_drive:
+        drive.flush_and_unmount()  # returns when every pending write has reached Drive
+        print("Drive is synced")
+    print("runtime released: results are on Drive; reconnect and run the notebook again for the next cycle")
+    runtime.unassign()
+    return True
+
+
 def notebook_rev(path: str | Path) -> str:
     """Revision of a notebook's CODE cells (sha256, 10 hex digits), with the ``NOTEBOOK_REV = "..."`` line itself
     blanked. Cell 1 stores it; cell 2 compares the running notebook's value with the repo's copy, so an outdated

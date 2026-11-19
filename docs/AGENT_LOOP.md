@@ -36,6 +36,8 @@ that runs. Settings are in cell 1: `CYCLE` (the cycle file), `CONFIG` (its run c
    For the first session after an instrument change set `AFTER_INSTRUMENT_CHANGE = True` in cell 1: it rebuilds
    the items (`build-data --force`) and re-measures those jobs from scratch (`cycle run --redo-stale`).
 4. Cell 8 shows the scorecard; cell 9 writes the feedback bundle.
+5. Cell 10 releases the GPU: it waits 10 seconds, lets Drive finish writing and ends the session
+   (`RELEASE_GPU_WHEN_DONE = False` in cell 1 keeps it open; it is also kept when the results are not on Drive).
 
 - Every stage logs one progress line per ~10% with an ETA, and marks warnings ⚠️ and errors ❌.
 - If one job fails, the next one still runs.
