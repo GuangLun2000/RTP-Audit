@@ -15,3 +15,4 @@ rtp_work/
 # local downloads of Colab results and feedback bundles (public repo: never commit them)
 /v_*/
 /local/
+/results
