@@ -134,6 +134,30 @@ def run_status(cfg: Config, unseal: bool = False) -> list[dict[str, Any]]:
 
 
 # --------------------------------------------------------------------------- doctor
+DISK_FAIL_GIB = 2.0  # below this a session's results (about 0.1 GiB per model and tier) are at risk
+PEFT_PROBE = "from peft.import_utils import is_torchao_available as f; f()"
+
+
+def peft_status() -> tuple[str, str]:
+    """(level, detail): can peft inject a LoRA adapter here? Colab ships a torchao that newer peft refuses the
+    moment an adapter is created (first seen on 2026-11-19: torchao 0.10.0, peft wants 0.16), which breaks every
+    ``zoo:`` variant. rtp never uses torchao; ``rtp.notebook.ensure_peft`` removes the incompatible copy."""
+    try:
+        import peft
+        from peft import import_utils
+    except ImportError as exc:
+        return "WARN", f"peft is not importable ({exc}): LoRA variants (zoo:<run_id>) cannot be loaded"
+    probe = getattr(import_utils, "is_torchao_available", None)
+    try:
+        if probe is not None:
+            getattr(probe, "cache_clear", lambda: None)()
+            probe()
+    except ImportError as exc:
+        return "WARN", (f"peft {peft.__version__} cannot create adapters: {exc}. Fix: pip uninstall -y torchao "
+                        f"(rtp.notebook.ensure_peft does it)")
+    return "PASS", f"{peft.__version__} (adapters can be created)"
+
+
 def _check(results: list[dict[str, str]], name: str, level: str, detail: str) -> None:
     results.append({"check": name, "level": level, "detail": detail})
 
@@ -192,7 +216,12 @@ def run_doctor(cfg: Config | None = None, check_hub: bool = True) -> int:
             p = p.parent
         if p is not None and p.exists():
             free = shutil.disk_usage(p).free / 2**30
-            _check(res, label, "PASS" if free > 30 else "WARN", f"{free:.0f} GiB free at {p}")
+            if free < DISK_FAIL_GIB:  # on Drive this is the account's quota: writes stop syncing when it is used up
+                _check(res, label, "FAIL", f"{free:.1f} GiB free at {p}: results may not be saved. Free space first "
+                                           f"(old runs/*/extract folders take about 6 GiB per model)")
+            else:
+                _check(res, label, "PASS" if free > 30 else "WARN", f"{free:.0f} GiB free at {p}")
+    _check(res, "peft", *peft_status())
     try:
         from rtp.paths import work_dir
 
@@ -358,6 +387,27 @@ def _tail(path: Path, n: int) -> str:
     return "\n".join(lines[-n:])
 
 
+SESSION_HOURS = 12.0  # one cycle is at most 12 hours: older notebook commands belong to earlier sessions
+
+
+def _this_session(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The notebook commands of the newest session: those within ``SESSION_HOURS`` of the last one. The history
+    file lives on Drive and grows over weeks; a bundle that listed week-old commands of another config hid the
+    ones that matter."""
+    def stamp(entry: dict[str, Any]) -> float | None:
+        try:
+            return time.mktime(time.strptime(str(entry.get("time")), "%Y-%m-%dT%H:%M:%SZ"))
+        except ValueError:
+            return None
+
+    times = [stamp(h) for h in history]
+    known = [t for t in times if t is not None]
+    if not known:
+        return history
+    newest = max(known)
+    return [h for h, t in zip(history, times) if t is None or newest - t <= SESSION_HOURS * 3600.0]
+
+
 def _unresolved_errors(evs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Errors not followed (in log order) by a successful run of the same stage and model."""
     out = []
@@ -400,7 +450,7 @@ def build_feedback(cfg: Config, tail: int = 60, unseal: bool = False) -> Path:
     errors = _unresolved_errors(evs) + _unresolved_errors(smoke_evs)
     unfinished = _never_finished(evs + smoke_evs)
     hist_path = work_dir() / "notebook_history.jsonl"
-    history = events.read(hist_path)[-40:]
+    history = _this_session(events.read(hist_path))[-40:]
     warn_counts: dict[tuple, int] = {}
     for e in evs:
         if e.get("kind") in ("warning", "log_error"):

@@ -201,8 +201,44 @@ def feedback(config: str) -> Path | None:
     fdir = _run_dir(config) / "feedback"
     latest = max(fdir.glob("feedback_*.md"), key=lambda p: p.stat().st_mtime, default=None)
     if latest:
-        print(f"\n📦 Feedback bundle: {latest}\n   Give this file to the coding agent (see docs/AGENT_LOOP.md).")
+        print(f"\n📦 Feedback bundle: {latest} ({latest.stat().st_size / 1024:.0f} KB)\n"
+              f"   Give THIS FILE to the coding agent (see docs/AGENT_LOOP.md), not the text printed by the "
+              f"notebook: the printed scorecard above is only a part of it.")
     return latest
+
+
+def download(path: str | Path) -> bool:
+    """Send a results file to the browser (Colab). False outside Colab; the file stays where it is."""
+    try:
+        from google.colab import files
+    except ImportError:
+        print(f"not on Colab: the file is at {path}")
+        return False
+    files.download(str(path))
+    print(f"⬇️ download started: {Path(path).name}. It is also on Drive under runs/<config>/feedback/.")
+    return True
+
+
+def ensure_peft() -> bool:
+    """Make sure peft can create LoRA adapters (needed by every ``zoo:`` variant). Colab ships a torchao that
+    newer peft refuses when an adapter is injected; rtp never uses torchao, so an incompatible copy is removed
+    from this session's environment. Returns True when adapters can be created."""
+    from rtp.ops import PEFT_PROBE
+
+    def probe() -> subprocess.CompletedProcess:
+        return subprocess.run([sys.executable, "-c", PEFT_PROBE], capture_output=True, text=True)
+
+    first = probe()
+    if first.returncode == 0:
+        return True
+    if "torchao" not in first.stdout + first.stderr:
+        print("⚠️ peft cannot be used:", (first.stdout + first.stderr).strip()[-400:])
+        return False
+    subprocess.run([sys.executable, "-m", "pip", "uninstall", "-q", "-y", "torchao"], capture_output=True, text=True)
+    ok = probe().returncode == 0
+    print("ℹ️ removed the preinstalled torchao (this peft refuses its version; rtp does not use torchao): "
+          + ("peft can create adapters now" if ok else "peft still fails, see doctor"))
+    return ok
 
 
 def release_gpu(wait_seconds: float = 10.0, force: bool = False) -> bool:

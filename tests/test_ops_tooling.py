@@ -136,7 +136,8 @@ def test_notebook_covers_a_cycle_session():
                    '"pip", "install", "-q", "-e", ".[dev]"', 'nb.run("smoke")', "nb.pytest(", '"build-data"',
                    'nb.run("cycle", "plan", "--cycle", CYCLE, *REDO, strict=True)',
                    'nb.run("cycle", "run", "--cycle", CYCLE, *REDO)', "AFTER_INSTRUMENT_CHANGE = False",
-                   "scorecard.md", "nb.feedback(CONFIG)", "doctor", "RELEASE_GPU_WHEN_DONE = True"):
+                   "scorecard.md", "nb.feedback(CONFIG)", "doctor", "RELEASE_GPU_WHEN_DONE = True",
+                   "nb.ensure_peft()", "nb.download(bundle)"):
         assert needle in src, needle
     last = "".join(nb["cells"][-1]["source"])  # the session ends itself: the GPU is not left running after a cycle
     assert "if RELEASE_GPU_WHEN_DONE:" in last and "nb.release_gpu(wait_seconds=10)" in last
@@ -294,3 +295,67 @@ def test_release_gpu_waits_syncs_drive_then_unassigns_and_keeps_local_results(mo
     calls.clear()
     monkeypatch.setattr("rtp.paths.work_dir", lambda: __import__("pathlib").Path("/content/drive/MyDrive/rtp"))
     assert notebook.release_gpu(wait_seconds=10) is True and calls == ["sleep 10", "flush", "unassign"]
+
+
+def test_bundle_lists_only_the_commands_of_the_newest_session():
+    from rtp import ops
+
+    old = [{"time": "2026-11-12T15:14:49Z", "command": "old pilot"}, {"time": "2026-11-12T19:05:07Z", "command": "old"}]
+    new = [{"time": "2026-11-19T22:16:07Z", "command": "doctor"}, {"time": "2026-11-19T22:37:14Z", "command": "status"}]
+    assert ops._this_session(old + new) == new  # a week-old session of another config is not this cycle
+    assert ops._this_session([{"command": "no time"}] + new) == [{"command": "no time"}] + new
+    assert ops._this_session([]) == [] and ops._this_session([{"time": "garbled"}]) == [{"time": "garbled"}]
+
+
+def test_doctor_fails_on_a_full_results_disk_and_reports_peft(monkeypatch, work_dir, tmp_path, capsys):
+    """Seen on Colab on 2026-11-19: Drive reported 0 GiB free as a mere warning, and peft could not create an
+    adapter because of the preinstalled torchao (one test failed; every zoo: variant would have failed later)."""
+    import collections
+    import shutil
+
+    from rtp import ops
+
+    usage = collections.namedtuple("usage", "total used free")
+    monkeypatch.setattr(shutil, "disk_usage", lambda p: usage(15 * 2**30, 15 * 2**30, int(0.3 * 2**30)))
+    monkeypatch.setattr(ops, "peft_status", lambda: ("WARN", "peft 0.19 cannot create adapters: torchao 0.10.0"))
+    assert ops.run_doctor(load_config(_cfg_file(tmp_path)), check_hub=False) == 1  # a FAIL: the exit code says so
+    checks = {c["check"]: c for c in json.loads((work_dir / "runs" / "ops" / "doctor.json").read_text())["checks"]}
+    assert checks["RTP_WORK_DIR disk"]["level"] == "FAIL" and "0.3 GiB free" in checks["RTP_WORK_DIR disk"]["detail"]
+    assert checks["peft"]["level"] == "WARN" and "torchao" in checks["peft"]["detail"]
+    capsys.readouterr()
+    monkeypatch.undo()
+    level, detail = ops.peft_status()  # the local environment: peft importable, no incompatible torchao
+    assert level == "PASS", detail
+
+
+def test_ensure_peft_removes_an_incompatible_torchao_and_download_needs_colab(monkeypatch, tmp_path, capsys):
+    import subprocess
+    import sys
+    import types
+
+    from rtp import notebook
+
+    calls: list[list[str]] = []
+    state = {"torchao": True}
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if "uninstall" in cmd:
+            state["torchao"] = False
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        bad = state["torchao"]
+        return subprocess.CompletedProcess(cmd, 1 if bad else 0, "", "ImportError: incompatible version of torchao" if bad else "")
+
+    monkeypatch.setattr(notebook.subprocess, "run", fake_run)
+    assert notebook.ensure_peft() is True
+    assert sum("uninstall" in c for c in calls) == 1 and "removed the preinstalled torchao" in capsys.readouterr().out
+    calls.clear()
+    assert notebook.ensure_peft() is True and len(calls) == 1  # already fine: nothing is uninstalled
+    monkeypatch.setitem(sys.modules, "google.colab", None)
+    assert notebook.download(tmp_path / "f.md") is False
+    sent: list[str] = []
+    colab = types.ModuleType("google.colab")
+    colab.files = types.SimpleNamespace(download=sent.append)
+    monkeypatch.setitem(sys.modules, "google", types.ModuleType("google"))
+    monkeypatch.setitem(sys.modules, "google.colab", colab)
+    assert notebook.download(tmp_path / "f.md") is True and sent == [str(tmp_path / "f.md")]
