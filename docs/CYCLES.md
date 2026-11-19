@@ -27,6 +27,21 @@ and the number of runs per training cycle follows from it.
 Cycle files exist for C0 and C1 (`configs/cycles/`). C2–C4 need the training code (batch 2); C5–C7 need the
 freeze and unseal code (batch 3).
 
+## What a cycle can conclude, and what it cannot
+
+| Cycle | Conclusions its scorecard supports | Not yet, and why |
+|---|---|---|
+| C0 | Is the letter readout the model's answer; does each evidence type move the model; where the brands sit on each ladder (too short, too coarse); do fictional names stay neutral; the pure-scale wiring identity on an 8B model; raw metrics move under a pure ×2 scale while every level stays; real cost per token | Nothing about SFT → DPO beyond a first look: `core` only, no direct readings, and the instrument may change |
+| C1 | Tulu 3 SFT → DPO, exploratory: c per evidence type and its spread (H1); T1 per stratum (did name effects grow by the scale factor); change of level in evidence units; direct vs converted level; two options vs four; raw metrics of the two stages next to c | No claim against training noise (no seed replicates before C2/C3); not confirmatory (this pair was seen in the pilot); the share of a raw-metric change explained by scale is batch 3 |
+| C2, C3 | Run-to-run band of c, T1 and the levels under content-neutral training; whether generic DPO sharpening is close to pure scale | The band comes from LoRA runs; the public stages are full fine-tunes (reported at 1× and 2× the band) |
+| C4 | H2: a planted preference raises the target's level with the dose, twins and non-targets stay in the band; detection limit of the level vs raw metrics | LoRA runs on a development checkpoint; the design is fixed when batch 2 is written |
+| C6 | Confirmatory, both families: DPO → RLVR; SFT → DPO in Olmo 3. H1 and H3 against the band | Dev categories only |
+| C7 | H4: held-out categories and open-question concentration predicted from level and scale | Opened once |
+
+Every instrument finding of a develop cycle becomes a proposal for the next instrument version; the table in
+docs/AGENT_LOOP.md §3 says which file each finding changes. Estimator and report changes (`rtp/scale`,
+`rtp/analyze.py`, `rtp/scorecard.py`) need no GPU time: `cycle report` recomputes them from the stored scores.
+
 Rules that hold for every cycle:
 
 - Development models: Tulu 3 SFT and DPO (already seen in the first pilot). Everything measured on them is

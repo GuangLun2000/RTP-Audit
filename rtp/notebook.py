@@ -170,7 +170,9 @@ def show(path: str | Path, max_chars: int = 20000) -> None:
     if not path.exists():
         print(f"(missing: {path})")
         return
-    text = path.read_text(encoding="utf-8")[:max_chars]
+    text = path.read_text(encoding="utf-8")
+    if len(text) > max_chars:  # never cut silently: the reader must know that something follows
+        text = text[:max_chars] + f"\n\n[... cut after {max_chars} characters; the full file is {path}]\n"
     try:
         from IPython.display import Markdown, display
 

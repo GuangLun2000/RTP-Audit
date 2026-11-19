@@ -153,22 +153,119 @@ def headline(res: dict[str, Any]) -> dict[str, Any]:
             pooled = g[g["category"] == "(all)"].sort_values("level")
             if len(pooled):
                 cell["A_top"], cell["x_top"] = _r(pooled["A_raw"].iloc[-1]), _r(pooled["x"].iloc[-1])
+                cell["A_first"], cell["x_first"] = _r(pooled["A_raw"].iloc[0]), _r(pooled["x"].iloc[0])
+                cell["se_top"] = _r(pooled["se"].iloc[-1])
+                cell["first_step_resolved"] = bool(pooled["A_iso"].iloc[0] > 0)
                 cell["curve_rises"] = bool(pooled["A_iso"].max() > 0)
-            per = g[g["category"] != "(all)"].groupby("category")["A_iso"].max()
+                cell["pooled_monotone"] = bool(pooled["monotone_raw"].iloc[0])
+            own = g[g["category"] != "(all)"]
+            per = own.groupby("category")["A_iso"].max()
             cell["n_category_curves"] = int(len(per))
             cell["n_flat_category_curves"] = int((~(per > 0)).sum())
+            cell["n_monotone_category_curves"] = int(own.groupby("category")["monotone_raw"].first().sum())
     if isinstance(ent, pd.DataFrame) and len(ent):
         for (stratum, etype), g in ent.groupby(["stratum", "evidence_type"], sort=True):
             cell = out.setdefault(f"{stratum}/{etype}", {})
             cell["n_brands"] = int(len(g))
             cell["delta_median"] = _r(g["delta"].median())
+            cell["abs_delta_median"] = _r(g["delta"].abs().median())
+            cell["abs_delta_q95"] = _r(g["delta"].abs().quantile(0.95))
             cell["share_delta_negative"] = _r((g["delta"] < 0).mean())
             have = g[g["status"].isin(["ok", "censored"])]
             if len(have):
                 cell["theta_median"] = _r(have["theta"].median())
+                cell["theta_q25"], cell["theta_q75"] = _r(have["theta"].quantile(0.25)), _r(have["theta"].quantile(0.75))
                 cell["share_censored"] = _r(have["censored"].astype(bool).mean())
+                cell["share_below_floor"] = _r(have["below_floor"].astype(bool).mean())
+                placed = have[~have["censored"].astype(bool)]  # same binning as the ruler table (ladder_rows)
+                cell["share_in_first_step"] = _r((placed["theta_level"].abs() <= 1).sum() / len(have))
             cell["share_on_flat_curve"] = _r(g["status"].eq("flat_curve").mean())
+            if stratum == "name":  # a bare name has no ladder of its own: its level on the attribute-only curves
+                cross = {}
+                for t in ("rating", "price", "reviews"):
+                    col = g.get(f"theta_cross_{t}")
+                    if col is not None and col.notna().any():
+                        cross[t] = {"theta_median": _r(col.median()), "n": int(col.notna().sum()),
+                                    "share_censored": _r(g[f"censored_cross_{t}"].astype(bool)[col.notna()].mean())}
+                if cross:
+                    cell["on_attr_curve"] = cross
     return out
+
+
+def ladder_rows(res: dict[str, Any]) -> list[dict[str, Any]]:
+    """The ruler itself, one row per (stratum, evidence type, level) of the pooled anchor curve: the step in
+    natural units (``x``), the response between two FICTIONAL names (``A``, logits, with its SE), the
+    monotone fit the conversion uses (``A_fit``), and ``share_of_brands``: of the real brands with a
+    preference level on this curve, the share whose |level| falls in the step that ends here. The share
+    beyond the last step is ``share_censored`` of the headline. This is the table a change of the step lists
+    (``ladder.*_deltas``) is decided on."""
+    curves, ent = res.get("curves"), res.get("entities")
+    rows: list[dict[str, Any]] = []
+    if not (isinstance(curves, pd.DataFrame) and len(curves)):
+        return rows
+    pooled = curves[curves["category"] == "(all)"]
+    for (arm, stratum, etype), g in pooled.groupby(["arm", "stratum", "evidence_type"], sort=True):
+        level_of = pd.Series(dtype=float)
+        if isinstance(ent, pd.DataFrame) and len(ent):
+            have = ent[(ent["arm"] == arm) & (ent["stratum"] == stratum) & (ent["evidence_type"] == etype)
+                       & ent["status"].eq("ok")]
+            n_placed = int(ent[(ent["arm"] == arm) & (ent["stratum"] == stratum) & (ent["evidence_type"] == etype)
+                               & ent["status"].isin(["ok", "censored"])].shape[0])
+            level_of = np.ceil(have["theta_level"].abs()).clip(lower=1)  # a level of exactly 0 is in the first step
+        else:
+            n_placed = 0
+        for r in g.sort_values("level").itertuples(index=False):
+            rows.append({"arm": arm, "stratum": stratum, "evidence_type": etype, "level": int(r.level), "x": _r(r.x),
+                         "A": _r(r.A_raw), "se": _r(r.se), "A_fit": _r(r.A_iso),
+                         "share_of_brands": _r((level_of == int(r.level)).sum() / n_placed) if n_placed else None})
+    return rows
+
+
+def name_rows(res: dict[str, Any], top: int = 12) -> dict[str, Any]:
+    """Fictional names ranked by how hard they pull, in the name-only stratum (no evidence shown). ``ratio``
+    = |pull| / the median |name effect| of the REAL brands of the same category: at 1 the made-up name pulls
+    as hard as a typical real brand. Descriptive: the rule for replacing a name is fixed in DECISIONS.md
+    before any name is replaced."""
+    pulls, ent = res.get("pulls"), res.get("entities")
+    if not all(isinstance(x, pd.DataFrame) and len(x) for x in (pulls, ent)):
+        return {}
+    p = pulls[(pulls["arm"] == "pair") & (pulls["stratum"] == "name") & pulls["identified"].astype(bool)].copy()
+    real = ent[(ent["arm"] == "pair") & (ent["stratum"] == "name")]
+    if not len(p) or not len(real):
+        return {}
+    typical = real.groupby("category")["delta"].apply(lambda s: float(s.abs().median()))
+    p["typical"] = p["category"].map(typical)
+    p["ratio"] = p["pull"].abs() / p["typical"].where(p["typical"] > 0)
+    ranked = p.sort_values("ratio", ascending=False, na_position="last")
+    return {"n_names": int(len(p)), "n_ratio_at_least_1": int((p["ratio"] >= 1).sum()),
+            "median_ratio": _r(p["ratio"].median()),
+            "top": [{"category": r.category, "name": r.name, "pull": _r(r.pull), "pull_se": _r(r.pull_se),
+                     "typical_real": _r(r.typical), "ratio": _r(r.ratio)}
+                    for r in ranked.head(top).itertuples(index=False)]}
+
+
+def raw_rows(res: dict[str, Any]) -> list[dict[str, Any]]:
+    """The scale-dependent metrics of prior work (rtp.scale.raw) per stratum and evidence type: choice share
+    and concentration with no evidence against the brand, and the flip rate at the TOP ladder step."""
+    raw = res.get("raw")
+    if not (isinstance(raw, pd.DataFrame) and len(raw)):
+        return []
+    rows = []
+    for (arm, stratum, etype), g in raw[raw["arm"] == "pair"].groupby(["arm", "stratum", "evidence_type"], sort=True):
+        row: dict[str, Any] = {"stratum": stratum, "evidence_type": etype}
+        zero = g[g["d"] == 0].set_index("metric")["value"]
+        for metric in ("choice_share_prob", "choice_share_argmax", "n_eff"):
+            if metric in zero.index:
+                row[metric] = _r(zero[metric])
+        moved = g[g["d"] > 0]
+        if len(moved):
+            row["d_top"] = int(moved["d"].max())
+            top = moved[moved["d"] == row["d_top"]].set_index("metric")["value"]
+            for metric in ("flip_rate_prob", "flip_rate_argmax"):
+                if metric in top.index:
+                    row[metric] = _r(top[metric])
+        rows.append(row)
+    return rows
 
 
 def compact_checks(checks: dict[str, Any]) -> dict[str, Any]:
@@ -247,7 +344,8 @@ def analyze_model(cfg: Config, model_id: str, split: str = "dev", unseal: bool =
     out_dir.mkdir(parents=True, exist_ok=True)
     _write_tables(out_dir, res)
     summary: dict[str, Any] = {"tiers": sorted(tiers), "letter_form": _form(res),
-                               "checks": _jsonable(compact_checks(res.get("checks", {}))), "headline": headline(res)}
+                               "checks": _jsonable(compact_checks(res.get("checks", {}))), "headline": headline(res),
+                               "ladders": ladder_rows(res), "names": name_rows(res), "raw": raw_rows(res)}
     if CTX_TIER in tiers:  # the same letter form as the two-option arm: one readout per model
         ctx = _run_scale(cfg, tiers, (CTX_TIER,), split, unseal, form=_form(res))
         _write_tables(out_dir, ctx, prefix="ctx_")
@@ -306,7 +404,8 @@ def compare(cfg: Config, model_a: str, model_b: str, split: str = "dev", unseal:
         if isinstance(res.get(name), pd.DataFrame):
             io.write_parquet(out_dir / f"{name}.parquet", res[name])
     summary = {"tiers_compared": list(shared), "tiers_left_out": {m: v for m, v in dropped.items() if v},
-               "letter_form": _form(a), "summary": _jsonable(res.get("summary", {})), "identity": identity(res)}
+               "letter_form": _form(a), "summary": _jsonable(res.get("summary", {})), "identity": identity(res),
+               "shape": shape_rows(res), "raw": raw_contrast(a, b)}
     io.write_json(out_dir / "summary.json", _jsonable(summary))
     io.atomic_write_text(out_dir / "summary.md", pair_markdown(model_a, model_b, split, summary))
     io.write_json(meta_path, _jsonable(meta))
@@ -338,48 +437,59 @@ def identity(res: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def shape_rows(res: dict[str, Any]) -> list[dict[str, Any]]:
+    """Did the ladder keep its SHAPE? Per level of the pooled curves: the ratio of the two models' responses
+    divided by the scale multiplier of the whole curve (1 at every level = the curve was only stretched)."""
+    shape = res.get("shape")
+    if not (isinstance(shape, pd.DataFrame) and len(shape)):
+        return []
+    pooled = shape[shape["category"] == "(all)"].sort_values(["stratum", "evidence_type", "level"])
+    return [{"stratum": r.stratum, "evidence_type": r.evidence_type, "level": int(r.level), "x": _r(r.x),
+             "A_a": _r(r.A_raw_a), "A_b": _r(r.A_raw_b), "ratio": _r(r.ratio), "ratio_over_c": _r(r.ratio_over_c)}
+            for r in pooled.itertuples(index=False)]
+
+
+def raw_contrast(a: dict[str, Any], b: dict[str, Any]) -> list[dict[str, Any]]:
+    """The scale-dependent metrics of the two models side by side (``raw_rows`` of each): what a study that
+    reports raw metrics would call the change of the brand preference between the two stages."""
+    rows_b = {(r["stratum"], r["evidence_type"]): r for r in raw_rows(b)}
+    out = []
+    for ra in raw_rows(a):
+        rb = rows_b.get((ra["stratum"], ra["evidence_type"]))
+        if rb is None:
+            continue
+        row: dict[str, Any] = {"stratum": ra["stratum"], "evidence_type": ra["evidence_type"]}
+        for metric in ("choice_share_prob", "choice_share_argmax", "n_eff", "flip_rate_prob", "flip_rate_argmax"):
+            if metric in ra and metric in rb:
+                row[f"{metric}_a"], row[f"{metric}_b"] = ra[metric], rb[metric]
+        if ra.get("d_top") == rb.get("d_top") and "d_top" in ra:
+            row["d_top"] = ra["d_top"]
+        out.append(row)
+    return out
+
+
 # --------------------------------------------------------------------------- summaries
-def _tree(obj: Any, indent: int = 0) -> list[str]:
-    pad = "  " * indent
-    lines: list[str] = []
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            if isinstance(v, dict) and v:
-                lines.append(f"{pad}- {k}:")
-                lines.extend(_tree(v, indent + 1))
-            elif isinstance(v, list) and v and isinstance(v[0], dict):
-                lines.append(f"{pad}- {k}:")
-                lines.extend(f"{pad}  - " + ", ".join(f"{a}={b}" for a, b in row.items()) for row in v)
-            else:
-                lines.append(f"{pad}- {k}: {v}")
-    return lines
-
-
 def model_markdown(model_id: str, split: str, summary: dict[str, Any]) -> str:
+    from rtp import scorecard
+
     lines = [f"# Analysis: {model_id} ({split})", "",
-             f"Tiers analysed: {', '.join(summary['tiers'])}; letter form `{summary.get('letter_form')}`. Units: logits "
-             f"for name effects (delta) and anchor curves (A); natural evidence units for preference levels (theta: "
-             f"stars, relative price, log review ratio). A check's `pass` is None when the loaded tiers hold no "
-             f"cell that carries it.",
-             "", "## Instrument checks", ""] + _tree(summary["checks"])
-    lines += ["", "## Headline numbers per stratum / evidence type", ""] + _tree(summary["headline"])
-    if summary.get("choice_set"):
-        lines += ["", "## Two options vs four (choice-set robustness; four-option effects re-centred, see "
-                      "rtp.analyze.choice_set_agreement)", ""] + _tree(summary["choice_set"])
-    return "\n".join(lines) + "\n"
+             f"Tiers analysed: {', '.join(summary['tiers'])}; letter form `{summary.get('letter_form')}`. Logits for "
+             f"name effects and anchor curves. {scorecard.UNIT_NOTE} A check that the loaded tiers cannot carry is "
+             f"'not evaluated', never a failure. All numbers: summary.json, checks.json.", "",
+             "## Findings", ""] + scorecard.findings_markdown(scorecard.model_findings(model_id, summary))
+    lines += ["## Checks", ""] + scorecard.verdict_rows({model_id: summary}) + ["", "## Tables", ""]
+    return "\n".join(lines + scorecard.model_section(summary)) + "\n"
 
 
 def pair_markdown(model_a: str, model_b: str, split: str, summary: dict[str, Any]) -> str:
-    lines = [f"# Stage pair: {model_a} -> {model_b} ({split})", "",
-             "c = scale multiplier (ratio of the two models' anchor curves, fictional names only); m = ratio of the "
-             "pooled name effects of real brands; T1 = log m - log c (0 under 'uniform sharpening'). The primary "
-             "interval of T1 is T1_t_lo..T1_t_hi (t over per-category values, centre T1_cat_mean).", "",
-             f"Tiers compared (finished by both models): {', '.join(summary['tiers_compared'])}"]
+    from rtp import scorecard
+
+    name = f"{model_a} -> {model_b}"
+    lines = [f"# Stage pair: {name} ({split})", ""]
     if summary.get("tiers_left_out"):
-        lines.append(f"Tiers left out because only one model has them: {summary['tiers_left_out']}")
-    lines += ["", "## Pure-scale identity", ""] + _tree(summary["identity"])
-    lines += ["", "## Summary", ""] + _tree(summary["summary"])
-    return "\n".join(lines) + "\n"
+        lines += [f"Tiers left out because only one model has them: {summary['tiers_left_out']}", ""]
+    lines += ["## Findings", ""] + scorecard.findings_markdown(scorecard.pair_findings(name, summary))
+    return "\n".join(lines + ["## Tables", ""] + scorecard.pair_section(name, summary)) + "\n"
 
 
 def measured_models(cfg: Config, split: str = "dev") -> list[str]:

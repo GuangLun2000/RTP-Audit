@@ -23,7 +23,7 @@ from typing import Any
 
 from rtp import events, io, registry, stages
 from rtp.config import Config
-from rtp.paths import data_dir, run_dir
+from rtp.paths import data_dir, model_slug, run_dir
 
 log = logging.getLogger(__name__)
 
@@ -304,6 +304,7 @@ def _rules(rows, errors) -> list[str]:
 
 
 SUMMARY_LINES, SUMMARY_CHARS = 90, 7000  # per stage summary in the feedback bundle
+SCORECARD_LINES, SCORECARD_CHARS = 700, 90000  # the newest scorecard goes in whole (6 models on e1: ~400 lines)
 
 
 def _scorecards(cfg: Config, n: int = 3) -> list[Path]:
@@ -321,33 +322,24 @@ def _scorecards(cfg: Config, n: int = 3) -> list[Path]:
     return out[-n:]
 
 
-# Rules on the instrument's own checks (rtp.scale.checks): each maps a failed check to what to look at next.
-# They only SUGGEST. In the develop phase an instrument change needs a version bump and a DECISIONS.md line;
-# in the confirm phase nothing changes.
-INSTRUMENT_RULES = [
-    ("readout", "Readout check failed: the option letters do not carry the answer for this model. Inspect the "
-                "decoded sample (gen_text) and cq_forced vs c_forced before trusting any preference level."),
-    ("ladder", "Ladder check failed: an anchor curve is not monotone, or many brands fall beyond the last step "
-               "(censored) or below the first one (floor). Develop phase: adjust the step lists in the config "
-               "(ladder.*_deltas), bump ladder.version, rebuild, re-measure. Confirm phase: report it as is."),
-    ("anchor_clean", "Anchor check failed: some fictional names pull as hard as real brands. Look at the pulls table "
-                     "of the analysis; replace outlying names in data/seeds/placebo_names.yaml by the rule fixed in "
-                     "DECISIONS.md (develop phase only)."),
-    ("common_channel", "Direct and converted preference levels disagree: real names respond to evidence differently "
-                       "from fictional ones (a name-by-evidence interaction). This is a finding about the model, "
-                       "not a bug: report both levels; do not pick the one that looks better."),
-]
+def _newest_card(cfg: Config) -> dict[str, Any] | None:
+    cards = _scorecards(cfg, n=1)
+    return io.read_json(cards[-1].with_suffix(".json")) if cards else None
 
 
-def _instrument_rules(cfg: Config) -> list[str]:
-    failed: set[str] = set()
-    for path in _scorecards(cfg, n=1):
-        card = io.read_json(path.with_suffix(".json"))
-        for res in card.get("models", {}).values():
-            for name, chk in (res.get("checks") or {}).items():
-                if isinstance(chk, dict) and chk.get("pass") is False:
-                    failed.add(name)
-    return [advice for key, advice in INSTRUMENT_RULES if key in failed]
+def _finding_actions(card: dict[str, Any] | None) -> list[str]:
+    """One line that sends the reader to the findings of the newest scorecard (rtp/scorecard.py: fixed rules on
+    the analysis numbers; the findings themselves are printed once, in the scorecard above)."""
+    items = (card or {}).get("findings") or []
+    count = {k: sum(f.get("kind") == k for f in items) for k in ("bug", "instrument", "research", "pending")}
+    if not any(count.values()):
+        return []
+    return [f"Cycle `{card.get('cycle')}`: {count['bug']} bug(s), {count['instrument']} instrument finding(s), "
+            f"{count['research']} result(s), {count['pending']} check(s) not evaluated yet (section Findings of the "
+            f"newest scorecard above). Order: bugs first (fix with a test); then instrument findings (develop phase: "
+            f"propose the change to the PI with the numbers, bump ladder.version, add a DECISIONS.md line, re-measure "
+            f"with AFTER_INSTRUMENT_CHANGE; confirm phase: report, change nothing); results are reported with their "
+            f"intervals and never tuned away."]
 
 
 def _head(path: Path, n: int, max_chars: int) -> str:
@@ -386,6 +378,8 @@ def _never_finished(evs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if e.get("kind") != "start":
             continue
         argv = e.get("data", {}).get("argv")
+        if argv and argv[0] in ("feedback", "status"):  # read-only; the one building this bundle is still running
+            continue
         if not any(f.get("kind") in ("done", "error") and f.get("data", {}).get("argv") == argv for f in evs[i + 1:]):
             out.append(e)
     return out
@@ -431,15 +425,18 @@ def build_feedback(cfg: Config, tail: int = 60, unseal: bool = False) -> Path:
         lines += ["", "## Commands that never finished (killed, out of host memory, or disconnected?)", ""] + \
             [f"- {e.get('time')} `{e.get('message')}`" for e in unfinished[-20:]]
     cards = _scorecards(cfg)
+    newest = _newest_card(cfg)
     if cards:
-        lines += ["", "## Cycle scorecards (newest last)", "",
-                  "Each cycle is one budgeted GPU session: its question, jobs with predicted and actual time, the "
-                  "instrument checks per model, the stage-pair comparisons and what changed since the previous "
-                  "cycle. Read these first.", ""]
-        for path in cards:
-            lines += [f"### {path.parent.name}", "", _head(path, 220, 14000), ""]
+        lines += ["", "## Cycle scorecards", "",
+                  "Each cycle is one budgeted GPU session. A scorecard starts with its FINDINGS (what the numbers "
+                  "mean and what to do next, by fixed rules), then the tables: checks, the ruler, the brands on it, "
+                  "the stage pairs, the ledger. The newest one is given in full; of earlier ones only the head. "
+                  "Read these first.", ""]
+        for path in cards[:-1]:
+            lines += [f"### {path.parent.name} (earlier cycle; head)", "", _head(path, 45, 6000), ""]
+        lines += [f"### {cards[-1].parent.name} (newest)", "", _head(cards[-1], SCORECARD_LINES, SCORECARD_CHARS), ""]
     lines += ["", "## Stage status", "", status_markdown(rows), "## Suggested next actions", ""]
-    lines += [f"{i + 1}. {s}" for i, s in enumerate(_rules(rows, errors) + _instrument_rules(cfg))]
+    lines += [f"{i + 1}. {s}" for i, s in enumerate(_rules(rows, errors) + _finding_actions(newest))]
     lines += ["", f"## Errors ({len(errors)} unresolved; {len(all_errors) - len(errors)} resolved by a later "
                   f"successful run and omitted)", ""]
     for e in errors[-20:]:
@@ -474,9 +471,14 @@ def build_feedback(cfg: Config, tail: int = 60, unseal: bool = False) -> Path:
     for fp in sorted((rdir / "format_probe").glob("*/summary.md")):  # dev only by construction
         lines += [f"### {fp.parent.name} / format-probe", "", "```", _head(fp, SUMMARY_LINES, SUMMARY_CHARS), "```", ""]
     adir = rdir / "analysis"
-    summaries = sorted(adir.glob("*/summary.md")) + sorted(adir.glob("_pairs/*/summary.md"))
+    shown = set()  # models and pairs whose tables are already in the newest scorecard above
+    if newest:
+        shown = {model_slug(m) for m in newest.get("models", {})}
+        shown |= {"__".join(model_slug(x) for x in k.split(" -> ")) for k in newest.get("pairs", {})}
+    summaries = [fp for fp in sorted(adir.glob("*/summary.md")) + sorted(adir.glob("_pairs/*/summary.md"))
+                 if fp.parent.name not in shown]
     if summaries:
-        lines += ["", "## Analysis summaries (dev; preference levels, anchor curves, stage pairs)", ""]
+        lines += ["", "## Analysis summaries of models and pairs that are not in the newest scorecard (dev)", ""]
         for fp in summaries:
             lines += [f"### {fp.parent.parent.name + '/' if fp.parent.parent.name == '_pairs' else ''}{fp.parent.name}",
                       "", "```", _head(fp, SUMMARY_LINES, SUMMARY_CHARS), "```", ""]

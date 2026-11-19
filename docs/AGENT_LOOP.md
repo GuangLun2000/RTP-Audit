@@ -45,13 +45,27 @@ that runs. Settings are in cell 1: `CYCLE` (the cycle file), `CONFIG` (its run c
 
 `nb.feedback(CONFIG)` writes `runs/<config>/feedback/feedback_<UTC>.md` and a `.json` twin. The bundle contains:
 
-- the newest cycle scorecards: question, jobs with predicted and actual time (the budget ledger), the
-  instrument checks per model, the stage-pair comparisons, and what changed since the previous cycle;
+- the newest cycle scorecard in full (earlier ones: their head). A scorecard has three layers:
+  1. **Findings**: statements derived from the numbers by fixed rules (`rtp/scorecard.py`), each with its kind
+     and the next step. Kinds: `bug`, `instrument`, `research`, `pending` (not evaluated yet, and which job
+     would), `budget`.
+  2. **Tables**: the four checks per model; the ruler (response of the anchor curve at every ladder step, and
+     the share of brands that falls in each step); the brands on it (name effect, preference level, shares
+     beyond the top, inside the first step, without a level); the scale-dependent metrics of prior work on the
+     same items; the fictional names ranked by pull; two options vs four. Per stage pair: c, m and T1 with
+     intervals, the change of level, the shape of the ruler step by step, the raw metrics of the two stages
+     side by side. Then the open question, what changed since the previous cycle, and the budget ledger.
+  3. The full numbers stay on disk: `scorecard.json`, `analysis/*/summary.json`, `checks.json`, `.parquet`.
+
+  "What changed" compares a cycle that was run again after an instrument change with its own earlier scorecard
+  (kept under `cycles/<name>/history/`): this is how a change of the instrument is judged. A cycle with no
+  earlier version of its own is compared with the newest scorecard of another cycle.
 - the environment and the non-PASS doctor checks; a status table of all stages;
-- suggested next actions, derived from fixed rules (bugs, stale stages, failed instrument checks);
+- suggested next actions from fixed rules on the stage states (errors, stale or partial stages), and one line
+  that counts the scorecard's findings by kind;
 - every error with its traceback; deduplicated warnings with counts;
-- the key results of each finished stage and the head of every dev summary (stage and analysis);
-  test-split results stay sealed unless `--unseal`;
+- the key results of each finished stage and the head of every dev stage summary; analysis summaries only of
+  models and pairs that are not in the newest scorecard; test-split results stay sealed unless `--unseal`;
 - log tails of failed and partial stages; the last pytest output.
 
 Give the bundle file to the agent. There is no need to paste the notebook output.
@@ -59,19 +73,34 @@ Give the bundle file to the agent. There is no need to paste the notebook output
 ## 3. Triage and improve (coding agent)
 
 1. Read `CLAUDE.md`, `DECISIONS.md` (section "Instrument v2"), `docs/CYCLES.md`, then the bundle.
-2. Triage every item. Each one is one of four kinds:
-   - **Bug** (error, crash, wrong file, broken resume): reproduce it locally with `python -m rtp.cli smoke` or a
-     minimal config. Fix it, and add a regression test in `tests/` that fails before the fix.
+2. Triage every item; the scorecard's Findings section has already sorted the analysis numbers. Each item
+   is one of four kinds:
+   - **Bug** (error, crash, wrong file, broken resume; a `bug` finding: the pure-scale identity fails, an
+     analysis crashed): reproduce it locally with `python -m rtp.cli smoke` or a minimal config. Fix it, and
+     add a regression test in `tests/` that fails before the fix.
    - **Environment** (doctor FAIL, library versions, GPU): fix it in `pyproject.toml` or the notebook. Never
      reinstall torch.
-   - **Instrument finding** (a check of the scorecard fails: the letter readout is partial, a ladder is not
-     monotone or too short, a fictional name pulls like a real brand): in the **develop** phase propose a change
-     of the instrument, with the numbers; if the PI agrees, change the config or code, bump `ladder.version`,
-     add a `DECISIONS.md` line, and plan the cycle that tests it. In the **confirm** phase nothing changes: the
-     finding is reported as it is.
+   - **Instrument finding**: in the **develop** phase propose a change of the instrument, with the numbers;
+     if the PI agrees, change the config or code, bump `ladder.version`, add a `DECISIONS.md` line, and plan
+     the cycle that tests it. Collect the findings of one bundle into ONE change. In the **confirm** phase
+     nothing changes: the finding is reported as it is.
    - **Research finding** (a scale multiplier, a content residual, a failed hypothesis): this is a result.
      Report it to the PI with its interval and noise band. Never change methods, thresholds or data to make a
      finding appear or disappear.
+
+   What an instrument finding changes in the program:
+
+   | Finding | What it means | What changes (develop phase) |
+   |---|---|---|
+   | The letter readout is not the model's answer (letter mass below 0.9) | No level of this model can be read | Prompt or prefill (`rtp/data/ladder_items.py`, `rtp/measure/parse.py`): a change of the GPU closure, every stage is re-measured |
+   | A curve does not rise | The evidence does not move the model in that stratum | How the evidence is rendered, or the type is reported as unusable; a longer ladder does not help |
+   | Brands beyond the top step (more than 10%) | The ladder is too short: those levels are bounds | Larger steps in `ladder.rating_deltas` / `price_deltas` / `review_ratios`; the finding gives the 95th percentile of the name effects against the top response |
+   | Most brands inside the first step | The ladder is too coarse near 0 | A finer first step, about the median name effect |
+   | Pooled curve not monotone | Neighbouring steps are closer than the noise | Merge or widen those steps (ruler table) |
+   | Fictional anchors fail (SD ratio at least 0.5) | Made-up names are not neutral | Fix the replacement rule in DECISIONS.md, then replace names in `data/seeds/placebo_names.yaml` |
+   | Fictional anchors not evaluated (real brands censored) | The ratio is only a bound | Extend the ladder first; do not replace names on this evidence |
+   | Open question: low mass on catalogue brands | N_eff describes a minority of answers | Read the sampled texts; prompt wording of `rtp/measure/open_set.py` |
+   | Estimator or report gap (a number the decision needs is missing) | The view is incomplete | `rtp/scale`, `rtp/analyze.py`, `rtp/scorecard.py`: outside every GPU closure, `cycle report` recomputes from stored scores, no GPU time |
 3. Add an entry to `docs/CYCLES.md`: the cycle's question, what the scorecard showed, the decision, the change.
 4. Run `pytest -q` and `python -m rtp.cli smoke` locally, commit with a message that names the bundle, push.
 5. Tell the PI which cycle to run next (a new cycle file, or the same one to resume).

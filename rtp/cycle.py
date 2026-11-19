@@ -19,7 +19,6 @@ the previous cycle. It is what the feedback bundle shows first.
 
 from __future__ import annotations
 
-import json
 import logging
 import sys
 import time
@@ -408,30 +407,79 @@ def _refresh(cfg: Config, spec: CycleSpec, ledger: list[dict[str, Any]], analyze
             "time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "final": final,
             "instrument": {"ladder_version": cfg.ladder.version, "data_hash": cfg.data_hash, **code_state()},
             "elapsed_s": round(time.time() - t_start, 1), "budget_s": spec.budget_hours * 3600.0,
-            "jobs": ledger, "models": models, "pairs": pairs, "decisions": spec.decisions,
-            "cut_order": spec.cut_order}
+            "jobs": ledger, "models": models, "pairs": pairs, "open_set": _open_set_results(cfg, spec, unseal),
+            "decisions": spec.decisions, "cut_order": spec.cut_order}
+    _archive_scorecard(cdir, card)  # the same cycle under an earlier instrument: kept for the comparison below
     prev = previous_scorecard(cfg, spec)
     card["changes"] = diff_cards(prev, card) if prev else []
-    card["compared_with"] = prev.get("cycle") if prev else None
+    card["compared_with"] = _card_label(prev, spec) if prev else None
+    from rtp import scorecard
+
+    card["findings"] = scorecard.findings(card)  # what the numbers mean for the next cycle, by fixed rules
     io.write_json(cdir / "scorecard.json", card)
     io.atomic_write_text(cdir / "scorecard.md", scorecard_markdown(card))
     return card
 
 
-# --------------------------------------------------------------------------- scorecard
-def previous_scorecard(cfg: Config, spec: CycleSpec) -> dict[str, Any] | None:
-    """The most recently written scorecard of ANOTHER cycle of this run."""
-    best: tuple[float, dict[str, Any]] | None = None
-    for path in (run_dir(cfg.name) / "cycles").glob("*/scorecard.json"):
-        if path.parent.name == spec.name:
+def _open_set_results(cfg: Config, spec: CycleSpec, unseal: bool) -> dict[str, Any]:
+    """Key numbers of the cycle's finished open-set stages (their completion records), per model."""
+    keep = ("coverage", "coverage_warning", "n_eff", "top1", "sample_match_rate", "sampled_n_eff_by_temperature",
+            "n_prompts")
+    out: dict[str, Any] = {}
+    for j in spec.jobs:
+        if j.stage != "open-set" or (j.split == "test" and not unseal) or job_state(cfg, j) != "done":
             continue
+        info = io.read_json(stage_dir(cfg.name, j.model, j.stage_name) / io.DONE_FILE)
+        out[j.model if j.split == "dev" else f"{j.model} [test]"] = {k: info[k] for k in keep if k in info}
+    return out
+
+
+# --------------------------------------------------------------------------- scorecard
+def _instrument_key(card: dict[str, Any]) -> tuple:
+    """What makes two scorecards measurements with different instruments: items, settings, readout code."""
+    ins = card.get("instrument") or {}
+    return ins.get("ladder_version"), ins.get("data_hash"), ins.get("ladder")
+
+
+def _archive_scorecard(cdir: Path, card: dict[str, Any]) -> None:
+    """Before a cycle's scorecard is replaced by one measured with ANOTHER instrument (the cycle was run again
+    after an instrument change), keep the old one under ``history/``. Without it the question every
+    instrument change exists for, "did it do what it was meant to do", could not be answered."""
+    path = cdir / "scorecard.json"
+    if not path.exists():
+        return
+    try:
+        old = io.read_json(path)
+    except Exception:  # noqa: BLE001 - an unreadable old scorecard must not stop a session
+        return
+    if _instrument_key(old) == _instrument_key(card) or not old.get("models"):
+        return
+    version, data_hash, code = (str(x) for x in _instrument_key(old))
+    stem = f"scorecard_v{version}_{data_hash[:8]}_{code[:8]}"
+    io.write_json(cdir / "history" / f"{stem}.json", old)
+    if (cdir / "scorecard.md").exists():
+        io.atomic_write_text(cdir / "history" / f"{stem}.md", (cdir / "scorecard.md").read_text(encoding="utf-8"))
+
+
+def _card_label(card: dict[str, Any], spec: CycleSpec) -> str:
+    if card.get("cycle") != spec.name:
+        return str(card.get("cycle"))
+    return f"{spec.name} as measured with ladder version {(card.get('instrument') or {}).get('ladder_version')} " \
+           f"(data `{str((card.get('instrument') or {}).get('data_hash'))[:8]}`)"
+
+
+def previous_scorecard(cfg: Config, spec: CycleSpec) -> dict[str, Any] | None:
+    """What this cycle's numbers are compared with: the newest scorecard of the SAME cycle under an earlier
+    instrument (``history/``) if there is one, else the most recently written scorecard of another cycle."""
+    own = sorted((cycle_dir(cfg, spec) / "history").glob("scorecard_*.json"), key=lambda q: q.stat().st_mtime)
+    others = sorted((q for q in (run_dir(cfg.name) / "cycles").glob("*/scorecard.json") if q.parent.name != spec.name),
+                    key=lambda q: q.stat().st_mtime)
+    for path in reversed(own or others):
         try:
-            card = io.read_json(path)
+            return io.read_json(path)
         except Exception:  # noqa: BLE001
             continue
-        if best is None or path.stat().st_mtime > best[0]:
-            best = (path.stat().st_mtime, card)
-    return best[1] if best else None
+    return None
 
 
 def _flatten(obj: Any, prefix: str = "") -> dict[str, float]:
@@ -458,77 +506,11 @@ def diff_cards(old: dict[str, Any], new: dict[str, Any], rel: float = 0.05, top:
     return rows[:top]
 
 
-def _num(x: Any) -> str:
-    if x is None:
-        return "n/a"
-    if isinstance(x, bool):
-        return "yes" if x else "NO"
-    if isinstance(x, float):
-        return f"{x:.3g}"
-    return str(x)
-
-
-def _bullets(obj: Any, indent: int = 0, max_items: int = 60) -> list[str]:
-    """A nested dict as an indented bullet list (the scorecard stays readable without knowing its schema)."""
-    lines: list[str] = []
-    pad = "  " * indent
-    if isinstance(obj, dict):
-        for i, (k, v) in enumerate(obj.items()):
-            if i >= max_items:
-                lines.append(f"{pad}- ... ({len(obj) - max_items} more)")
-                break
-            if isinstance(v, (dict, list)) and v:
-                lines.append(f"{pad}- {k}:")
-                lines.extend(_bullets(v, indent + 1, max_items))
-            else:
-                lines.append(f"{pad}- {k}: {_num(v)}")
-    elif isinstance(obj, list):
-        for i, v in enumerate(obj):
-            if i >= max_items:
-                lines.append(f"{pad}- ... ({len(obj) - max_items} more)")
-                break
-            if isinstance(v, (dict, list)):
-                lines.append(f"{pad}- " + json.dumps(v, default=str)[:300])
-            else:
-                lines.append(f"{pad}- {_num(v)}")
-    return lines
-
-
 def scorecard_markdown(card: dict[str, Any]) -> str:
-    ins = card["instrument"]
-    lines = [f"# Scorecard: cycle {card['cycle']} ({card['phase']}, config {card['config']})", "",
-             f"**Question.** {card['question']}", "",
-             f"- written {card['time']}{'' if card['final'] else ' (session still running)'}; elapsed "
-             f"{fmt_h(card['elapsed_s'])} of a {fmt_h(card['budget_s'])} budget",
-             f"- instrument: ladder version {ins['ladder_version']}, data hash `{ins['data_hash']}`, readout code "
-             f"`{ins['ladder']}`, commit `{ins['git_commit'][:10]}`"]
-    if card["phase"] == "develop":
-        lines.append("- phase **develop**: every number below is exploratory; the instrument may still change")
-    lines += ["", "## Jobs (budget ledger)", "", "| job | state | predicted | actual |", "|---|---|---|---|"]
-    for e in card["jobs"]:
-        act = "—" if e["actual_s"] is None else fmt_h(e["actual_s"])
-        lines.append(f"| {e['job']} | {e['state']} | {fmt_h(e['predicted_s'])} | {act} |")
-    lines += ["", "## Instrument checks per model", ""]
-    if not card["models"]:
-        lines.append("(no model has a finished ladder stage yet)")
-    for m, res in card["models"].items():
-        lines += [f"### {m}", ""] + _bullets(res) + [""]
-    lines += ["## Stage pairs", ""]
-    if not card["pairs"]:
-        lines.append("(no pair has both models analysed yet)")
-    for name, res in card["pairs"].items():
-        lines += [f"### {name}", ""] + _bullets(res) + [""]
-    if card.get("compared_with"):
-        lines += [f"## What changed since cycle {card['compared_with']}", ""]
-        lines += [f"- {c['key']}: {_num(c['before'])} -> {_num(c['now'])}" for c in card["changes"]] or \
-            ["(no headline number moved by more than 5%)"]
-        lines.append("")
-    if card["decisions"]:
-        lines += ["## Decisions this cycle informs", ""] + [f"- {d}" for d in card["decisions"]] + [""]
-    if card["cut_order"]:
-        lines += ["## Cut first if the session runs long", ""] + [f"{i}. {c}" for i, c in
-                                                                  enumerate(card["cut_order"], 1)] + [""]
-    return "\n".join(lines) + "\n"
+    """Findings, compact tables and the ledger (rtp/scorecard.py)."""
+    from rtp import scorecard
+
+    return scorecard.scorecard_markdown(card)
 
 
 def run_report(spec: CycleSpec, sets: list[str] | None = None, unseal: bool = False) -> Path:

@@ -282,7 +282,8 @@ def test_scorecard_renders_and_reports_changes():
             "jobs": [{"job": "ladder-core m", "predicted_s": 600.0, "actual_s": 420.0, "state": "done"},
                      {"job": "ladder-ext m", "predicted_s": 1800.0, "actual_s": None,
                       "state": "deferred (does not fit in the remaining budget)"}],
-            "models": {"m": {"checks": {"readout": {"pass": False, "c_forced": 0.71}}}},
+            "models": {"m": {"checks": {"readout": {"pass": False, "c_forced": 0.71, "mean_c_forced": 0.71},
+                                        "thresholds": {"COVERAGE_MIN": 0.9}}}},
             "pairs": {"a -> b": {"attr/rating": {"c": 1.71, "T1": 0.20}}}, "decisions": ["Keep the full card?"],
             "cut_order": ["ctx tier"]}
     changes = cycle.diff_cards(old, card)
@@ -292,5 +293,7 @@ def test_scorecard_renders_and_reports_changes():
     card["changes"], card["compared_with"] = changes, "c0"
     md = cycle.scorecard_markdown(card)
     for needle in ("# Scorecard: cycle c1", "**Question.** Q?", "phase **develop**", "| ladder-core m | done | 10 min |",
-                   "deferred", "- pass: NO", "## What changed since cycle c0", "Keep the full card?", "1. ctx tier"):
+                   "deferred", "## Findings", "the letter readout is not the model's answer", "FAIL",
+                   "1 of 2 jobs are not done", "## What changed since cycle c0", "Keep the full card?", "1. ctx tier"):
         assert needle in md, needle
+    assert md.index("## Findings") < md.index("## Instrument checks per model") < md.index("## Jobs (budget ledger)")

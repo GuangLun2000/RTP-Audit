@@ -26,7 +26,11 @@ COMMON_CHANNEL_MAX_MEDIAN_DIFF = 0.5
 (level-index units, so the three evidence types share one tolerance)."""
 ANCHOR_SD_RATIO_MAX = 0.5
 """Anchor clean passes when the SD of the fictional names' preference levels is below this fraction of the
-SD of the real brands' levels, in every (arm, stratum, evidence_type) where the ratio is defined."""
+SD of the real brands' levels, in every (arm, stratum, evidence_type) where the ratio is a VALUE: defined,
+and with at most ``CENSORED_SHARE_MAX`` of the real brands beyond the ladder. Censored brands enter at the
+top of the ladder, which squeezes their SD: the ratio of such a row is an upper bound. It cannot fail the check
+(a row that fails only because the ladder is too short would send the next cycle off to replace names that are
+fine); a bound below the limit is still a pass."""
 CENSORED_SHARE_MAX = 0.10
 """Ladder passes when at most this share of brand cells is worth more than the whole ladder."""
 COVERAGE_MIN = 0.9
@@ -95,14 +99,23 @@ def _common_channel(entities: pd.DataFrame) -> dict[str, Any]:
 
 def _anchor_clean(fictional: pd.DataFrame, entities: pd.DataFrame) -> dict[str, Any]:
     table = anchor_clean(fictional, entities)
+    share = table["n_censored_real"] / table["n_real"].where(table["n_real"] > 0)
+    table = table.assign(bound_only=table["ratio"].notna() & ~(share <= CENSORED_SHARE_MAX))
     defined = table[table["ratio"].notna()]
+    usable, bound = defined[~defined["bound_only"]], defined[defined["bound_only"]]
     unidentified = fictional[~fictional["identified"].astype(bool)]
-    worst = float(defined["ratio"].max()) if len(defined) else float("nan")
+    worst = float(usable["ratio"].max()) if len(usable) else float("nan")
+    proven = bool(len(bound)) and bool((bound["ratio"] < ANCHOR_SD_RATIO_MAX).all())  # a bound below the limit passes
+    flag = bool(worst < ANCHOR_SD_RATIO_MAX) if len(usable) else (True if proven else None)
     return {
         "rows": records(table), "n_rows": int(len(table)), "n_rows_undefined": int(len(table) - len(defined)),
+        # rows whose real brands are censored: the ratio is an upper bound and does not decide the flag
+        "n_rows_bound_only": int(len(bound)),
+        "max_ratio_bound_only": _num(float(bound["ratio"].max()) if len(bound) else float("nan")),
         "n_names_unidentified": int(len(unidentified)), "max_ratio": _num(worst),
+        # the same comparison in logits (SD of pulls / SD of name effects): no curve, nothing censored
         "max_ratio_logit": _num(float(table["ratio_logit"].max()) if table["ratio_logit"].notna().any() else float("nan")),
-        "pass": bool(worst < ANCHOR_SD_RATIO_MAX) if len(defined) else None,
+        "pass": flag,
     }
 
 
@@ -171,7 +184,11 @@ def condition_checks(units: pd.DataFrame, curves: pd.DataFrame, entities: pd.Dat
         not censored (``dropped`` counts the others by reason). ``theta_matched`` is the conversion of the
         d = 0 point of the SAME units the direct reading uses.
     ``anchor_clean``: is a made-up name worth little? The SD ratio of ``rtp.scale.theta.anchor_clean``;
-        passes when every defined ratio is below ``ANCHOR_SD_RATIO_MAX``.
+        passes when every ratio that is a value is below ``ANCHOR_SD_RATIO_MAX``. Rows with more than
+        ``CENSORED_SHARE_MAX`` of the real brands beyond the ladder give only an upper bound
+        (``n_rows_bound_only``, ``max_ratio_bound_only``) and cannot fail the check; with no usable row the
+        check passes if every bound is below the limit and is otherwise not evaluated: the ladder has to be
+        extended first.
     ``ladder``: does the ladder work as a ruler? Share of category curves whose raw means rise strictly,
         share of brand cells beyond the top of their curve (pass at most ``CENSORED_SHARE_MAX``), share
         below the first resolved step (the ladder cannot tell them from 0). Curves that never rise are

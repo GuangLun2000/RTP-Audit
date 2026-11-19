@@ -20,13 +20,16 @@ import time
 from rtp import registry
 from rtp.config import load_config
 from rtp.paths import model_slug, run_dir, work_dir
+from rtp.scorecard import IDENTITY_TOL
 
 log = logging.getLogger(__name__)
 
 SMOKE_BUDGET_SECONDS = 600  # smoke end-to-end within 10 minutes (on GPU)
 SMOKE_MARKER = "_SMOKE_RUN"
 SCALE = 2.0  # the pure-scale variant measured next to the smoke model
-SCALE_TOL = 1e-6  # float32 logits times a power of two are exact; the tolerance covers the estimators' arithmetic
+# float32 logits times a power of two are exact; the tolerance covers the estimators' arithmetic. The same
+# constant decides the pure-scale finding of every scorecard.
+SCALE_TOL = IDENTITY_TOL
 
 
 class SmokeFailure(RuntimeError):

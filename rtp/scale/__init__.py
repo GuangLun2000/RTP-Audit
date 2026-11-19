@@ -45,8 +45,8 @@ __all__ = ["analyze_model", "analyze_units", "anchor_clean", "anchor_curves", "a
 SUMMARY_FIELDS = ("n_entities", "n_categories", "n_negative_a", "c", "c_lo", "c_hi", "log_c", "log_c_cat_mean",
                   "log_c_t_lo", "log_c_t_hi", "n_cat_log_c", "m", "m_lo", "m_hi", "T1", "T1_cat_mean", "T1_t_lo",
                   "T1_t_hi", "n_cat_T1", "T1_lo", "T1_hi", "T2", "T2_ratio", "median_d_theta", "mean_d_theta",
-                  "n_d_theta", "n_d_theta_below_floor", "c_lo_crossed", "c_hi_crossed", "T1_lo_crossed",
-                  "T1_hi_crossed")
+                  "n_d_theta", "n_d_theta_below_floor", "c_lo_crossed", "c_hi_crossed", "m_lo_crossed",
+                  "m_hi_crossed", "T1_lo_crossed", "T1_hi_crossed")
 
 
 def analyze_units(units: pd.DataFrame, steps: dict[str, list[float]]) -> dict[str, Any]:

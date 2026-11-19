@@ -191,9 +191,13 @@ python -m rtp.cli cycle report --cycle configs/cycles/c0.yaml   # re-run the ana
   recalibrated on every finished stage) and exits with code 5 when the remaining work exceeds the budget. No
   cycle file may budget more than 12 hours.
 - `run` executes the jobs in order, each stage in its own process, and rewrites
-  `runs/<name>/cycles/<cycle>/scorecard.md` after every job: the budget ledger (predicted vs actual), the
-  instrument checks per model, the stage pairs, and what changed since the previous cycle. Jobs that no longer
-  fit are deferred; re-running continues the cycle.
+  `runs/<name>/cycles/<cycle>/scorecard.md` after every job. A scorecard starts with its findings: statements
+  derived from the numbers by fixed rules (`rtp/scorecard.py`), each marked as a bug, an instrument finding, a
+  result, a check that is not evaluated yet, or a budget note, with the next step. Then the tables: the four
+  instrument checks per model, the ruler (anchor-curve response at every ladder step and where the brands
+  fall on it), the scale-dependent metrics of prior work on the same items, the stage pairs (c, m, T1 with
+  intervals, the change of preference level, the shape of the ruler), what changed since the previous cycle,
+  and the budget ledger. Jobs that no longer fit are deferred; re-running continues the cycle.
 - A cycle never mixes results. If a job's existing stage was built by other code, items or settings, `plan` and
   `run` stop before any GPU time; `--redo-stale` (develop phase only) measures those jobs again from scratch.
 
@@ -210,7 +214,7 @@ python -m rtp.cli feedback --config configs/e1.yaml
 - `doctor`: GPU, bf16, library pins, whether the HF token is set, disks, Drive, data, and Hub access to the
   configured models.
 - `feedback`: writes `runs/<config>/feedback/feedback_<UTC>.md` for a coding agent (see `docs/AGENT_LOOP.md`),
-  starting with the newest cycle scorecards and including the head of every finished dev summary.
+  starting with the newest cycle scorecard in full and including the head of every finished dev stage summary.
 
 Every command also appends `start`/`done`/`error` events (errors with tracebacks) and all warnings to
 `runs/<config>/events.jsonl`.
@@ -427,7 +431,7 @@ Unit tests use synthetic data and run on CPU. They cover:
 - instrument v2: ladder items (determinism, the crossing of names, both directions on the ladders, only the
   manipulated attribute differing, the sealed tier files), model variants and the adapter zoo, the answer-path
   estimator for N options, the cycle files, the budget cap, the cost model and its recalibration, the
-  develop/confirm guard, the deadline, the scorecard;
+  develop/confirm guard, the deadline, the scorecard and the rules that turn its numbers into findings;
 - the estimators (`rtp/scale`) on synthetic scores: exact invariance of the preference level to a scale change,
   cancellation of position bias, recovery of the scale multiplier, the null statistics and their error rate;
 - the legacy four-option family: the answer-path estimator, deferred-answer parsing, matched card sets, the

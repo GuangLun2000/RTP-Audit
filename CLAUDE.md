@@ -22,6 +22,9 @@ Code, comments, docstrings, commits: English only.
 - Experiments run as CYCLES (`configs/cycles/*.yaml`, `rtp/cycle.py`): one question, one budgeted GPU session of at
   most 12 h on one G4 (RTX PRO 6000, 96 GB), one scorecard. `cycle plan` refuses a cycle that does not fit.
   After each cycle: read the feedback bundle, add an entry to docs/CYCLES.md (question, result, decision, change).
+- A scorecard starts with FINDINGS (`rtp/scorecard.py`: fixed rules on the analysis numbers). Kinds: bug (fix, with
+  a test), instrument (develop phase: one collected change, version bump, DECISIONS.md line, re-measure), research
+  (report with its interval; never tune away), pending, budget. Read the findings before the tables.
 - Anything the objective leaves open: simplest implementation + one line in DECISIONS.md. Do not widen scope.
 - Research code: never tune methods, thresholds or data to make results look good; report anomalies as they are.
 - IDs marked "to be confirmed" are validated at runtime; on failure raise a clear error, never substitute.
@@ -61,3 +64,4 @@ Code, comments, docstrings, commits: English only.
 - Secrets: HF_TOKEN only from env / Colab secrets; never in code, configs, logs, commits.
 - Drive is slow: HF_HOME on local disk, results in RTP_WORK_DIR. IDs only in rtp/registry.py; never reinstall torch.
 - The repo is public: never commit downloaded results (`v_*/`, `local/`) or the objective file.
+- `rtp/report.py` is the LEGACY cross-model report (command `report`); the cycle scorecard is `rtp/scorecard.py`.
