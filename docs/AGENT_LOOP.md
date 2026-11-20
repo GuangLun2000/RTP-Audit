@@ -38,7 +38,9 @@ that runs. Settings are in cell 1: `CYCLE` (the cycle file), `CONFIG` (its run c
    or was interrupted under another GPU or library version, cell 6 stops before any GPU time and names the jobs.
    For the first session after an instrument change set `AFTER_INSTRUMENT_CHANGE = True` in cell 1: it rebuilds
    the items (`build-data --force`) and re-measures those jobs from scratch (`cycle run --redo-stale`).
-4. Cell 8 shows the scorecard; cell 9 writes the feedback bundle.
+4. Cell 8 shows the scorecard. Cell 9 prints the **digest**: plain text between a BEGIN and an END line, made
+   to be copied out of the notebook (a "Copy the digest" button sits under it) and pasted to the coding agent.
+   The cell also writes and downloads the complete feedback bundle.
 5. Cell 10 releases the GPU: it waits 10 seconds, lets Drive finish writing and ends the session
    (`RELEASE_GPU_WHEN_DONE = False` in cell 1 keeps it open; it is also kept when the results are not on Drive).
 
@@ -73,7 +75,12 @@ that runs. Settings are in cell 1: `CYCLE` (the cycle file), `CONFIG` (its run c
   models and pairs that are not in the newest scorecard; test-split results stay sealed unless `--unseal`;
 - log tails of failed and partial stages; the last pytest output.
 
-Give the bundle file to the agent. There is no need to paste the notebook output.
+What to give the agent: **the digest printed by cell 9** (also saved as `feedback/digest_<UTC>.md`). On about
+30 KB it holds the environment, what ran and what failed (with the end of each traceback), the findings, every
+number of the scorecard's tables as one line per cell (letter mass per kind of item, the ruler, the brands on
+it, the anchors, the stage pairs with the contrast families and T1 against every reference), the diagnostics
+and timing of each stage, and the token probe. The bundle file is the complete record; the agent asks for it
+only when the digest is not enough (a full traceback, a log tail, a stage summary).
 
 ## 3. Triage and improve (coding agent)
 

@@ -254,5 +254,12 @@ def test_ladder_probe_on_the_smoke_model(smoke_lm, work_dir, monkeypatch):
     assert sum(res["all"]["continuation"].values()) == pytest.approx(1.0) and set(res["all"]["continuation"]) == set(OUTCOMES)
     assert df["outcome"].isin(OUTCOMES).all() and df["gen_text"].notna().all()
     assert np.isclose(df["top1_letter"].mean(), res["all"]["top1_letter"])
+    assert len(res["examples"]) == 2 * len(res["cells"])  # per kind of item, the lowest letter masses
+    assert {"cell", "letter_mass", "first_tokens", "outcome", "text"} <= set(res["examples"][0])
+    from rtp.ops import _probe_digest
+
+    lines = _probe_digest(res)
+    assert any("top-1 is a letter" in x and "continuation ends on" in x for x in lines)
+    assert sum(x.startswith("  lowest letter mass") for x in lines) == len(res["examples"])
     text = (out / "summary.md").read_text()
     assert "| kind of item (target / stratum / evidence) |" in text and "Answer:" in text

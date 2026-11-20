@@ -263,7 +263,8 @@ Open the notebook straight from GitHub: [Open in Colab](https://colab.research.g
 6. `cycle plan`: the priced job list.
 7. `cycle run`, then the token probe (`cycle probe`) and `status`. Re-run this cell to resume.
 8. The scorecard.
-9. **Feedback bundle** for the coding agent.
+9. The **digest** for the coding agent, printed in the cell: copy it from the BEGIN line to the END line and
+   paste it into the chat. The complete feedback bundle is written and downloaded as well.
 
 Stages run through `rtp.notebook`, which streams live output, marks warnings and errors, keeps going when one job
 fails, and keeps a session history.

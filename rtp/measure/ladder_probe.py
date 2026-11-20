@@ -109,6 +109,17 @@ def summarize(df: pd.DataFrame) -> dict[str, Any]:
     return {"all": block(df), "cells": {cell: block(g) for cell, g in df.groupby("cell", sort=True)}}
 
 
+def examples(df: pd.DataFrame, per_cell: int = 2) -> list[dict[str, Any]]:
+    """Per kind of item, the items with the lowest letter mass: their first tokens and their continuation."""
+    out = []
+    for cell, g in df.sort_values("letter_mass").groupby("cell", sort=True):
+        for r in g.head(per_cell).itertuples(index=False):
+            out.append({"cell": cell, "letter_mass": round(float(r.letter_mass), 3),
+                        "first_tokens": json.loads(r.top_tokens)[:4], "outcome": r.outcome,
+                        "text": (r.gen_text or "").replace("\n", " ")[:110]})
+    return out
+
+
 def markdown(model_id: str, tier: str, res: dict[str, Any], df: pd.DataFrame, prompt_tail: str) -> str:
     def pct(x: Any) -> str:
         return "n/a" if x is None or x != x else f"{100.0 * float(x):.0f}%"
@@ -197,7 +208,7 @@ def run_ladder_probe(cfg: Config, model_id: str, tier: str = "core", n_units: in
                      "gen_text": texts[i][0], "outcome": outcome, "gen_label": label})
     df = pd.DataFrame(rows)
     res = {"model_id": model_id, "tier": tier, "n_units_per_cell": int(n_units), "top_k": int(top_k),
-           "max_new_tokens": int(max_new_tokens), **summarize(df)}
+           "max_new_tokens": int(max_new_tokens), **summarize(df), "examples": examples(df)}
     out_dir = run_dir(cfg.name) / "ladder_probe" / model_slug(model_id)
     out_dir.mkdir(parents=True, exist_ok=True)
     io.write_parquet(out_dir / "items.parquet", df)

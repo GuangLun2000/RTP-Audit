@@ -193,18 +193,50 @@ def summary() -> None:
 
 
 def feedback(config: str) -> Path | None:
-    """Write the feedback bundle for a coding agent and show where it is."""
+    """Write the feedback bundle and PRINT THE DIGEST: the cycle's findings and every key number as plain
+    text, between a BEGIN and an END line, made to be copied into the chat with the coding agent. Returns
+    the path of the complete bundle (the fallback when the agent asks for more)."""
     summary()
     rc = run("feedback", "--config", config)
     if rc != 0:
         return None
     fdir = _run_dir(config) / "feedback"
     latest = max(fdir.glob("feedback_*.md"), key=lambda p: p.stat().st_mtime, default=None)
+    digest = max(fdir.glob("digest_*.md"), key=lambda p: p.stat().st_mtime, default=None)
+    if digest:
+        text = digest.read_text(encoding="utf-8")
+        print("\n" + text)
+        copy_box(text)
+        print(f"📋 Copy the digest above, from the BEGIN line to the END line ({len(text) / 1024:.0f} KB), and paste "
+              f"it to the coding agent: it holds the findings and every key number of this cycle.")
     if latest:
-        print(f"\n📦 Feedback bundle: {latest} ({latest.stat().st_size / 1024:.0f} KB)\n"
-              f"   Give THIS FILE to the coding agent (see docs/AGENT_LOOP.md), not the text printed by the "
-              f"notebook: the printed scorecard above is only a part of it.")
+        print(f"📦 Complete bundle: {latest} ({latest.stat().st_size / 1024:.0f} KB); only needed when the agent "
+              f"asks for more than the digest.")
     return latest
+
+
+def copy_box(text: str) -> bool:
+    """On Colab: a text box holding ``text`` and a button that copies it (a click inside the box, then
+    Ctrl/Cmd+A and Ctrl/Cmd+C, copies it as well). False elsewhere: the printed text is the same."""
+    try:
+        from google.colab import output as _colab  # only on Colab: elsewhere the printed text is enough
+        from IPython.display import HTML, display
+
+        del _colab
+    except ImportError:
+        return False
+    import html
+
+    display(HTML(
+        '<div style="margin:6px 0"><button onclick="(function(b){var t=b.parentNode.querySelector(\'textarea\');'
+        't.focus();t.select();var ok=false;try{ok=document.execCommand(\'copy\');}catch(e){}'
+        'var m=b.parentNode.querySelector(\'span\');function say(x){m.textContent=x;}'
+        'if(navigator.clipboard){navigator.clipboard.writeText(t.value).then(function(){say(\' copied\');},'
+        'function(){say(ok?\' copied\':\' the text is selected: press Ctrl/Cmd+C\');});}'
+        'else{say(ok?\' copied\':\' the text is selected: press Ctrl/Cmd+C\');}})(this)">Copy the digest</button>'
+        '<span></span><br><textarea readonly rows="5" style="width:100%;font-family:monospace;font-size:11px">'
+        + html.escape(text) + "</textarea></div>"))
+    return True
 
 
 def download(path: str | Path) -> bool:

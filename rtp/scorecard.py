@@ -862,6 +862,188 @@ def open_set_rows(open_set: dict[str, Any]) -> list[str]:
                         ("sampled N_eff by temperature", _by_key("sampled_n_eff_by_temperature", "T="))])
 
 
+# --------------------------------------------------------------------------- the digest
+def _cut(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[:limit].rsplit(" ", 1)[0] + " ..."
+
+
+def _vals(values: list[Any], nd: int = 3) -> str:
+    return "[" + ", ".join(num(v, nd) for v in values) + "]"
+
+
+def _model_digest(model: str, res: dict[str, Any]) -> list[str]:
+    """One model in compact lines: every number the scorecard's tables carry, one line per cell."""
+    if res.get("error"):
+        return [f"### {model}", f"analysis failed: {res['error']}"]
+    lines = [f"### {model} (tiers {', '.join(res.get('tiers') or [])}; letter form {res.get('letter_form')})"]
+    rd = (res.get("checks") or {}).get("readout") or {}
+    if rd:
+        lines.append(f"readout: letter mass {num(rd.get('mean_c_forced'))} (free position {num(rd.get('mean_c_free'))}), "
+                     f"{pct(rd.get('share_low_coverage'))} of units below the flag; L vs letters+names on "
+                     f"{rd.get('n_mass_units')} units: corr {num(rd.get('corr_L_mass'))}, median gap "
+                     f"{num(rd.get('median_abs_diff_L_mass'))}; median |position bias| "
+                     f"{num(rd.get('median_abs_order_bias'))}; letter-colliding names "
+                     f"{pct(rd.get('share_letter_collision'))}")
+    by_cell = (rd.get("by_cell") or []) + ((res.get("readout_ctx") or {}).get("by_cell") or [])
+    if by_cell:
+        lines.append("letter mass by kind of item (options tier target stratum evidence: mass, share below the flag, units):")
+        lines += [f"  {'two' if r.get('arm') == 'pair' else 'four'} {r.get('tier')} "
+                  f"{'fictional' if r.get('family') == 'anchor' else 'real'} {r.get('stratum')} "
+                  f"{'tied' if r.get('tied') else 'differs'}: {num(r.get('mean_c_forced'))}, "
+                  f"{pct(r.get('share_low_coverage'))}, n={r.get('n_units')}" for r in by_cell]
+    head = res.get("headline") or {}
+    ladders: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for r in res.get("ladders") or []:
+        if r.get("arm", "pair") == "pair":
+            ladders.setdefault((r["stratum"], r["evidence_type"]), []).append(r)
+    if ladders:
+        lines.append("ruler (x = step in natural units, A = logits between two fictional names, brands% = share of the "
+                     "brands with a level inside each step):")
+    for (stratum, etype), rows in ladders.items():
+        rows = sorted(rows, key=lambda r: r["level"])
+        cell = head.get(f"{stratum}/{etype}") or {}
+        lines.append(f"  {stratum}/{etype} x={_vals([r.get('x') for r in rows])} A={_vals([r.get('A') for r in rows])} "
+                     f"se_top={num(cell.get('se_top'), 2)} jump={num(cell.get('jump_index'))} brands%="
+                     + "[" + ", ".join(pct(r.get("share_of_brands")).rstrip("%") for r in rows) + "] "
+                     f"beyond_top={pct(cell.get('share_censored'))} rising_category_curves={_rising(cell) or 'n/a'}")
+    if head:
+        lines.append("brands (real vs fictional; D = name effect in logits; level in x units):")
+    for key, c in head.items():
+        if "n_brands" not in c:
+            continue
+        line = (f"  {key} n={c.get('n_brands')} median_D={num(c.get('delta_median'))} negative="
+                f"{pct(c.get('share_delta_negative'))} median|D|={num(c.get('abs_delta_median'))} q95|D|="
+                f"{num(c.get('abs_delta_q95'))}")
+        if c.get("theta_median") is not None:
+            line += (f" | level median={num(c.get('theta_median'))}{interval(c.get('theta_q25'), c.get('theta_q75'))} "
+                     f"in_first_step={pct(c.get('share_in_first_step'))} D/first_step median="
+                     f"{num(c.get('ratio_to_first_step_median'))} beyond_top={pct(c.get('share_censored'))} "
+                     f"no_level={pct(c.get('share_on_flat_curve'))}")
+        if c.get("on_attr_curve"):
+            line += " | on attr curves: " + "; ".join(
+                f"{t} {num(v.get('theta_median'))} (beyond {pct(v.get('share_censored'))})"
+                for t, v in c["on_attr_curve"].items())
+        lines.append(line)
+    anchors = [r for r in ((res.get("checks") or {}).get("anchor_clean") or {}).get("rows") or []
+               if r.get("arm", "pair") == "pair"]
+    if anchors:
+        lines.append("fictional anchors per cell (SD ratio of levels | SD of pulls / SD of real name effects, logits):")
+        lines += [f"  {r.get('stratum')}/{r.get('evidence_type')}{' (bare names on attr curve)' if r.get('cross_stratum') else ''}"
+                  f" {num(r.get('ratio'))} | {num(r.get('sd_pull'))} / {num(r.get('sd_delta'))} = "
+                  f"{num(r.get('ratio_logit'))}{' [bound only]' if r.get('bound_only') else ''}" for r in anchors]
+    names = res.get("names") or {}
+    if names.get("top"):
+        lines.append(f"fictional names (name-only): {names.get('n_ratio_at_least_1')} of {names.get('n_names')} pull at "
+                     f"least as hard as a typical real brand; median ratio {num(names.get('median_ratio'))}; largest: "
+                     + "; ".join(f"{r['name']} ({r['category']}) {num(r['pull'])}±{num(r.get('pull_se'), 2)} "
+                                 f"ratio {num(r['ratio'])}" for r in names["top"][:8]))
+    if res.get("raw"):
+        lines.append("raw metrics: " + "; ".join(
+            f"{r['stratum']}/{r['evidence_type']} share {num(r.get('choice_share_prob'))} (argmax "
+            f"{num(r.get('choice_share_argmax'))}) N_eff {num(r.get('n_eff'))}"
+            + (f" flip@top {num(r.get('flip_rate_prob'))} (argmax {num(r.get('flip_rate_argmax'))})"
+               if r.get("flip_rate_prob") is not None else "") for r in res["raw"]))
+    if res.get("choice_set"):
+        lines.append("two vs four options: " + "; ".join(
+            f"{k} n={v.get('n_brands')} D corr {num(v.get('delta_corr'))} diff "
+            f"{num(v.get('delta_median_diff_4_minus_2'))}, level corr {num(v.get('theta_corr'))} diff "
+            f"{num(v.get('theta_median_diff_4_minus_2'))}" for k, v in res["choice_set"].items()))
+    return lines
+
+
+def _pair_digest(name: str, res: dict[str, Any], note: str) -> list[str]:
+    if res.get("error"):
+        return [f"### {name}", f"comparison failed: {res['error']}"]
+    a, b = pair_models(name)
+    lines = [f"### {name} (tiers {', '.join(res.get('tiers_compared') or [])}){note}"]
+    if scale_variant(a, b) is not None:
+        return lines + [f"pure-scale identity: {identity_text(res.get('identity') or {})}"]
+    own = pair_cells(res, cross=False)
+    lines.append("c (anchor curves): " + "; ".join(f"{_cell(c)} {num(c.get('c'))}{_c_interval(c)}" for c in own))
+    h1 = ((res.get("summary") or {}).get("H1") or {}).get("pair") or {}
+    if h1.get("range") is not None:
+        lines.append(f"H1: log c spreads by {num(h1['range'])} over the evidence types (resampled "
+                     f"{num(h1.get('lo_crossed', h1.get('lo')))}..{num(h1.get('hi_crossed', h1.get('hi')))})")
+    lines.append("real names (m | T1 pooled | T1 by category | median change of level | negative in A):")
+    for c in pair_cells(res):
+        cell = _cell(c) + (" on attr curve" if c.get("cross_stratum") else "")
+        lines.append(f"  {cell}: m {num(c.get('m'))}{interval(c.get('m_lo_crossed', c.get('m_lo')), c.get('m_hi_crossed', c.get('m_hi')))}"
+                     f" | {num(c.get('T1'))}{interval(c.get('T1_lo_crossed', c.get('T1_lo')), c.get('T1_hi_crossed', c.get('T1_hi')))}"
+                     f" | {num(c.get('T1_cat_mean'))}{interval(c.get('T1_t_lo'), c.get('T1_t_hi'))} (n={c.get('n_cat_T1')})"
+                     f" | {_level_change(c)} | {c.get('n_negative_a')}")
+    shape: dict[str, list[dict[str, Any]]] = {}
+    for r in res.get("shape") or []:
+        shape.setdefault(_cell(r), []).append(r)
+    if shape:
+        lines.append("shape (B / A at each step): " + "; ".join(
+            f"{k} {_vals([r.get('ratio') for r in sorted(rows, key=lambda r: r['level'])])}" for k, rows in shape.items()))
+    fam: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for r in res.get("families") or []:
+        fam.setdefault((r["stratum"], r["family"]), []).append(r)
+    if fam:
+        lines.append("multipliers by contrast family (B / A, t interval over categories, n categories):")
+        lines += [f"  {stratum} | {family}: " + "; ".join(
+            f"{r['evidence_type']} {_ti(r, 'multiplier')} n={r.get('n_categories')}" for r in rows)
+            for (stratum, family), rows in fam.items()]
+    refs: dict[str, list[dict[str, Any]]] = {}
+    for r in res.get("references") or []:
+        refs.setdefault(_cell(r), []).append(r)
+    if refs:
+        lines.append("T1 of the real names against every reference (0 = grew like the reference):")
+        lines += [f"  {cell}: " + "; ".join(f"{r['reference']} of {r['ref_stratum']}/{r['ref_evidence_type']} {_ti(r)}"
+                                          for r in rows) for cell, rows in refs.items()]
+    if res.get("counterfactual"):
+        lines.append("raw choice share and uniform sharpening (A -> B | A sharpened by the measured c | by the best factor):")
+        lines += [f"  {_cell(r)}: {num(r.get('share_a'))} -> {num(r.get('share_b'))} | x{num(r.get('c'))}: "
+                  f"{num(r.get('share_cf'))} ({pct(r.get('explained'))}) | x{num(r.get('c_best'))}: "
+                  f"{num(r.get('share_best'))} ({pct(r.get('explained_best'))})" for r in res["counterfactual"]]
+    if res.get("raw"):
+        lines.append("raw metrics A -> B: " + "; ".join(
+            f"{_cell(r)} share {_before_after('choice_share_prob')(r)}, N_eff {_before_after('n_eff')(r)}"
+            + (f", flip@top {_before_after('flip_rate_prob')(r)}" if "flip_rate_prob_a" in r else "")
+            for r in res["raw"]))
+    return lines
+
+
+def digest_lines(card: dict[str, Any]) -> list[str]:
+    """The scorecard as compact text for copy and paste: the findings (statement only; the fixed next steps
+    are in ``scorecard.md``) and every number of the tables, one line per cell. Pure function of the card."""
+    models, pairs = card.get("models") or {}, card.get("pairs") or {}
+    ins = card.get("instrument") or {}
+    lines = [f"CYCLE {card.get('cycle')} ({card.get('phase')}, config {card.get('config')}) written {card.get('time')}"
+             f"{'' if card.get('final') else ' (session still running)'}; ladder version {ins.get('ladder_version')}, "
+             f"data {ins.get('data_hash')}, readout code {ins.get('ladder')}, commit {str(ins.get('git_commit'))[:10]}",
+             f"QUESTION {card.get('question')}", "",
+             "JOBS (state, predicted -> actual): " + "; ".join(
+                 f"{e['job']}: {e['state']}, {fmt_time(e.get('predicted_s') or 0)} -> "
+                 f"{'-' if e.get('actual_s') is None else fmt_time(e['actual_s'])}" for e in card.get("jobs") or []),
+             f"elapsed {fmt_time(card.get('elapsed_s') or 0)} of a {fmt_time(card.get('budget_s') or 0)} budget", "",
+             "## Findings (statements; kinds: bug, instrument, research, pending, budget)"]
+    items = card.get("findings")
+    if items is None:
+        items = findings(card)
+    lines += [f"- [{f['kind']}] {f['scope']}: {_cut(f['text'], 560)}" for f in items] or ["(none)"]
+    if models:
+        lines += ["", "## Checks"] + verdict_rows(models) + ["", UNIT_NOTE]
+    for m, res in models.items():
+        base = variant_of(m, models)
+        if base is None:
+            lines += [""] + _model_digest(m, res)
+        else:
+            lines += ["", f"### {m}: pure-scale variant of {base}; letter mass "
+                          f"{num(_readout(res).get('mean_c_forced'))}; see its stage pair"]
+    for name, res in pairs.items():
+        lines += [""] + _pair_digest(name, res, readout_note(name, models))
+    if card.get("open_set"):
+        lines += ["", "## Open question (which brand is named unprompted)"] + open_set_rows(card["open_set"])
+    if card.get("changes"):
+        lines += ["", f"## Changed since cycle {card.get('compared_with')} (largest first)"]
+        lines += [f"- {c['key']}: {num(c['before'])} -> {num(c['now'])}" for c in card["changes"][:12]]
+    if card.get("decisions"):
+        lines += ["", "## Decisions this cycle informs"] + [f"- {d}" for d in card["decisions"]]
+    return lines
+
+
 # --------------------------------------------------------------------------- the scorecard
 def scorecard_markdown(card: dict[str, Any]) -> str:
     ins = card.get("instrument") or {}

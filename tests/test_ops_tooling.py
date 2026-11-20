@@ -298,6 +298,27 @@ def test_release_gpu_waits_syncs_drive_then_unassigns_and_keeps_local_results(mo
     assert notebook.release_gpu(wait_seconds=10) is True and calls == ["sleep 10", "flush", "unassign"]
 
 
+def test_notebook_feedback_prints_the_digest_for_copy_and_paste(tmp_path, monkeypatch, capsys):
+    """The PI hands a cycle over by copying the output of the feedback cell: the digest must be printed whole."""
+    from rtp import notebook, ops
+
+    fdir = tmp_path / "feedback"
+    fdir.mkdir()
+    (fdir / "feedback_20261120T000000Z.md").write_text("# Feedback bundle\n" + "x" * 5000)
+    digest = f"{ops.DIGEST_BEGIN} (e1, t): copy everything down to the END line =====\n" + "\n".join(
+        f"line {i} <tag> & more" for i in range(900)) + f"\n{ops.DIGEST_END} (123 characters) =====\n"
+    (fdir / "digest_20261120T000000Z.md").write_text(digest)
+    monkeypatch.setattr(notebook, "run", lambda *a, **k: 0)
+    monkeypatch.setattr(notebook, "_run_dir", lambda config: tmp_path)
+    assert notebook.feedback("configs/e1.yaml") == fdir / "feedback_20261120T000000Z.md"
+    out = capsys.readouterr().out
+    assert digest in out and "line 899 <tag> & more" in out  # whole: never cut, never escaped
+    assert "Copy the digest above, from the BEGIN line to the END line" in out and "Complete bundle:" in out
+    assert notebook.copy_box("text") is False  # the copy button exists on Colab only
+    monkeypatch.setattr(notebook, "run", lambda *a, **k: 4)
+    assert notebook.feedback("configs/e1.yaml") is None
+
+
 def test_bundle_lists_only_the_commands_of_the_newest_session():
     from rtp import ops
 

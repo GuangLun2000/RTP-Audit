@@ -21,7 +21,9 @@ Code, comments, docstrings, commits: English only.
   pass, push `main`, report to the PI, stop.
 - Experiments run as CYCLES (`configs/cycles/*.yaml`, `rtp/cycle.py`): one question, one budgeted GPU session of at
   most 12 h on one G4 (RTX PRO 6000, 96 GB), one scorecard. `cycle plan` refuses a cycle that does not fit.
-  After each cycle: read the feedback bundle, add an entry to docs/CYCLES.md (question, result, decision, change).
+  After each cycle: read the digest the PI pastes (notebook cell 9; the feedback bundle is the complete record),
+  add an entry to docs/CYCLES.md (question, result, decision, change). Whatever a cycle needs to be judged by
+  must be IN the digest (`rtp/scorecard.py` `digest_lines`, `rtp/ops.py` `build_digest`): the PI copies it by hand.
 - A scorecard starts with FINDINGS (`rtp/scorecard.py`: fixed rules on the analysis numbers). Kinds: bug (fix, with
   a test), instrument (develop phase: one collected change, version bump, DECISIONS.md line, re-measure), research
   (report with its interval; never tune away), pending, budget. Read the findings before the tables.

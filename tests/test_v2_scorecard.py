@@ -200,6 +200,14 @@ def test_feedback_bundle_carries_the_newest_scorecard_whole(run):
     probe = run_dir(cfg.name) / "ladder_probe" / "m"  # the token probe's tables travel in the bundle too
     probe.mkdir(parents=True)
     (probe / "summary.md").write_text("# Ladder probe: m (tier core)\n\n| kind of item | items |\n")
+    block = {"n_items": 80, "letter_mass": 0.62, "top1_letter": 0.7, "n_top1_not_letter": 24,
+             "continuation": {"picked option": 0.8, "declines": 0.2},
+             "continuation_when_top1_not_letter": {"picked option": 0.4, "declines": 0.6},
+             "other_tokens": [{"token": "' Both'", "mean_prob": 0.21, "share_top1": 0.3}]}
+    io.write_json(probe / "ladder_probe.json", {
+        "model_id": "m", "tier": "core", "all": block, "cells": {"real brand / attr / tied": block},
+        "examples": [{"cell": "real brand / attr / tied", "letter_mass": 0.31, "first_tokens": [["' Both'", 0.55]],
+                      "outcome": "declines", "text": " Both options have the same rating"}]})
     bundle = ops.build_feedback(cfg).read_text()
     assert "truncated" not in bundle.split("## Stage status")[0]
     for needle in ("### t (newest)", "## Findings", "## Stage pairs", "**Shape of the ruler**", "## Jobs (budget ledger)",
@@ -208,6 +216,20 @@ def test_feedback_bundle_carries_the_newest_scorecard_whole(run):
                    "**Raw choice share and uniform sharpening**", "**Letter mass by kind of item**",
                    "**Fictional anchors per cell**", "## Token probe", "# Ladder probe: m (tier core)"):
         assert needle in bundle, needle
+    # the digest: what the notebook prints for copy and paste. Everything a cycle is judged by, far shorter
+    digest = sorted((run_dir(cfg.name) / "feedback").glob("digest_*.md"))[-1].read_text()
+    assert digest.startswith(ops.DIGEST_BEGIN) and digest.rstrip().endswith("characters) =====")
+    body = digest[:digest.rindex(ops.DIGEST_END)].rstrip("\n")
+    assert f"({len(body)} characters)" in digest.splitlines()[-1]  # a cut paste is noticed
+    for needle in ("ENV commit", "ERRORS: 0 unresolved", "NEVER FINISHED: `ladder --tier ext`", "PYTEST:",
+                   "## Findings", "- [research]", "## Checks", "letter mass by kind of item",
+                   "ruler (x = step in natural units", "attr/rating x=[0.3, 0.6, 1, 2] A=[", "jump=", "brands (real vs",
+                   "fictional anchors per cell", "c (anchor curves): attr/price", "multipliers by contrast family",
+                   "T1 of the real names against every reference", "raw choice share and uniform sharpening",
+                   "## Stage records", "ladder_ext: n_items", "## Token probe", "' Both' 0.210 (30%)",
+                   "lowest letter mass, real brand / attr / tied: 0.31 | ' Both' 0.55 | declines |"):
+        assert needle in digest, needle
+    assert "Next:" not in digest and len(digest) < 0.75 * len(bundle) and len(digest) < 40000
     unfinished = bundle.split("## Commands that never finished")[1].split("\n## ")[0]
     assert "ladder --tier ext" in unfinished and "feedback" not in unfinished  # the command writing the bundle is no casualty
     assert "## Analysis summaries" not in bundle  # both models and the pair are already in the scorecard

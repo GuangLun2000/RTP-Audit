@@ -436,6 +436,117 @@ def _never_finished(evs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+DIGEST_BEGIN, DIGEST_END = "===== BEGIN RTP-AUDIT DIGEST", "===== END RTP-AUDIT DIGEST"
+RECORD_SKIP = ("finished_with", "ladder_variants", "model_id", "split", "timing_complete", "warnings")
+
+
+def _compact(value: Any) -> str | None:
+    """A scalar or a small dict of scalars as short text; None for anything longer."""
+    if isinstance(value, bool) or value is None:
+        return str(value)
+    if isinstance(value, float):
+        return f"{value:.4g}"
+    if isinstance(value, (int, str)):
+        return str(value) if len(str(value)) <= 60 else None
+    if isinstance(value, dict) and len(value) <= 12:
+        parts = [(k, _compact(v)) for k, v in value.items()]
+        return "{" + ", ".join(f"{k}: {v}" for k, v in parts) + "}" if all(v is not None for _, v in parts) else None
+    return None
+
+
+def _record_line(info: dict[str, Any]) -> str:
+    """The completion record of a stage (its diagnostics and timing) on one line."""
+    parts = [(k, _compact(v)) for k, v in info.items() if k not in RECORD_SKIP]
+    return ", ".join(f"{k} {v}" for k, v in parts if v is not None)
+
+
+def _probe_digest(res: dict[str, Any]) -> list[str]:
+    def pct(x: Any) -> str:
+        return "n/a" if x is None or x != x else f"{100.0 * float(x):.0f}%"
+
+    def ends(d: dict[str, float]) -> str:
+        return ", ".join(f"{k} {pct(v)}" for k, v in d.items()) if d else "n/a"
+
+    lines = [f"### {res.get('model_id')} (tier {res.get('tier')}; 'top-1 is a letter' and the endings do not move with "
+             f"scale; 'picked option' = the option whose letter has the higher probability)"]
+    for cell, b in [("all", res.get("all") or {}), *(res.get("cells") or {}).items()]:
+        lines.append(f"  {cell}: n={b.get('n_items')} letter mass {b.get('letter_mass', float('nan')):.3f}, top-1 is a "
+                     f"letter {pct(b.get('top1_letter'))}; continuation ends on: {ends(b.get('continuation') or {})}; "
+                     f"{b.get('n_top1_not_letter')} items with another top-1 end on: "
+                     f"{ends(b.get('continuation_when_top1_not_letter') or {})}")
+        lines.append("    other tokens (mean prob, top-1 share): " + "; ".join(
+            f"{t['token']} {t['mean_prob']:.3f} ({pct(t['share_top1'])})" for t in (b.get("other_tokens") or [])[:6]))
+    for e in (res.get("examples") or [])[:14]:
+        first = ", ".join(f"{t} {p:.2f}" for t, p in e.get("first_tokens") or [])
+        lines.append(f"  lowest letter mass, {e.get('cell')}: {e.get('letter_mass')} | {first} | {e.get('outcome')} | "
+                     f"{e.get('text')}")
+    return lines
+
+
+def build_digest(cfg: Config, ts: str, rows: list[dict[str, Any]], errors: list[dict[str, Any]],
+                 unfinished: list[dict[str, Any]], history: list[dict[str, Any]], doctor: dict[str, Any] | None,
+                 warn_counts: dict[tuple, int], newest: dict[str, Any] | None) -> str:
+    """The cycle on one screen of plain text, made to be copied out of the notebook and pasted to the coding
+    agent: environment, what ran and what failed, the findings, every number of the scorecard's tables in
+    compact lines, the stage diagnostics and the token probe. The complete record stays in the bundle file."""
+    from rtp import scorecard
+    from rtp.provenance import environment
+
+    rdir = run_dir(cfg.name)
+    env = environment()
+    lines = [f"{DIGEST_BEGIN} ({cfg.name}, {ts}): copy everything down to the END line =====",
+             f"ENV commit {str(env.get('git_commit'))[:10]}{' (DIRTY)' if env.get('git_dirty') else ''} | python "
+             f"{env.get('python')} | torch {env.get('torch')} | transformers {env.get('transformers')} | "
+             f"{env.get('device')}"]
+    if doctor:
+        bad = [c for c in doctor["checks"] if c["level"] != "PASS"]
+        lines.append(f"DOCTOR ({doctor.get('time')}): " + ("; ".join(
+            f"{c['level']} {c['check']}: {str(c['detail'])[:160]}" for c in bad) or "all checks PASS"))
+    if history:
+        lines.append("SESSION: " + "; ".join(
+            f"{'ok' if h.get('exit_code') == 0 else 'FAILED exit ' + str(h.get('exit_code'))} "
+            f"`{str(h.get('command')).replace('rtp.cli ', '')[:90]}` {float(h.get('seconds') or 0):.0f}s"
+            for h in history))
+    if unfinished:
+        lines.append("NEVER FINISHED: " + "; ".join(f"`{str(e.get('message'))[:120]}`" for e in unfinished[-5:]))
+    lines.append(f"ERRORS: {len(errors)} unresolved")
+    for e in errors[-5:]:
+        trace = [x for x in (e.get("data", {}).get("traceback") or "").strip().splitlines() if x.strip()][-4:]
+        lines.append(f"- {e.get('stage')} / {e.get('model')}: {str(e.get('message'))[:240]}"
+                     + (" :: " + " | ".join(x.strip()[:200] for x in trace) if trace else ""))
+    top = sorted(warn_counts.items(), key=lambda kv: -kv[1])[:5]
+    lines.append(f"WARNINGS: {len(warn_counts)} distinct" + ("" if not top else ": " + "; ".join(
+        f"[{stage} / {model}] x{n} {msg[:140]}" for (stage, model, msg), n in top)))
+    pt = [x.strip() for x in _tail(rdir / "pytest_last.txt", 40).splitlines()]
+    verdict = [x for x in pt if " passed" in x or " failed" in x or " error" in x][-1:]
+    failed = [x for x in pt if x.startswith(("FAILED", "ERROR"))][:6]
+    lines.append("PYTEST: " + (verdict[0] if verdict else "(no run saved)") + "".join(f" | {x[:160]}" for x in failed))
+    other = [f"{scorecard.short(r['model'])} / {r['stage']}: {r['state']}" for r in rows
+             if not r.get("sealed") and r["stage"] != "build-data" and r["state"] not in ("done", "not started")]
+    lines.append("STAGES NOT DONE: " + ("; ".join(other) or "none (every started stage is done)"))
+    lines.append("")
+    if newest:
+        lines += scorecard.digest_lines(newest)
+    else:
+        lines.append("(no cycle scorecard yet: `cycle run` has not finished a job)")
+    records = []
+    for r in rows:
+        p = Path(r["path"]) if r["path"] else None
+        if p and not r.get("sealed") and r["stage"] != "build-data" and io.is_done(p):
+            records.append(f"- {scorecard.short(r['model'])} / {r['stage']}: {_record_line(io.read_json(p / io.DONE_FILE))}")
+    if records:
+        lines += ["", "## Stage records (diagnostics and timing of each finished stage)"] + records
+    probes = sorted((rdir / "ladder_probe").glob("*/ladder_probe.json"))  # dev only by construction
+    if probes:
+        lines += ["", "## Token probe (which tokens take the probability the option letters do not)"]
+        for fp in probes:
+            lines += _probe_digest(io.read_json(fp))
+    from rtp.log import redact_text
+
+    body = "\n".join(redact_text(x) for x in lines)
+    return body + f"\n{DIGEST_END} ({len(body)} characters) =====\n"
+
+
 def build_feedback(cfg: Config, tail: int = 60, unseal: bool = False) -> Path:
     from rtp.paths import work_dir
     from rtp.provenance import environment
@@ -555,5 +666,9 @@ def build_feedback(cfg: Config, tail: int = 60, unseal: bool = False) -> Path:
                                                   "warnings": [{"stage": k[0], "model": k[1], "message": k[2],
                                                                 "count": n} for k, n in warn_counts.items()],
                                                   "doctor": doctor})
+    digest_path = fdir / f"digest_{ts}.md"  # what the notebook prints for copy and paste
+    io.atomic_write_text(digest_path, build_digest(cfg, ts, rows, errors, unfinished, history, doctor, warn_counts,
+                                                   newest))
     print(f"feedback bundle: {md_path}")
+    print(f"digest: {digest_path}")
     return md_path
