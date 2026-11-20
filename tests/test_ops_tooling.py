@@ -137,13 +137,14 @@ def test_notebook_covers_a_cycle_session():
                    'nb.run("cycle", "plan", "--cycle", CYCLE, *REDO, strict=True)',
                    'nb.run("cycle", "run", "--cycle", CYCLE, *REDO)', "AFTER_INSTRUMENT_CHANGE = False",
                    "scorecard.md", "nb.feedback(CONFIG)", "doctor", "RELEASE_GPU_WHEN_DONE = True",
-                   "nb.ensure_peft()", "nb.download(bundle)"):
+                   "nb.ensure_peft()", "nb.download(bundle)", 'nb.run("cycle", "probe", "--cycle", CYCLE)',
+                   'CYCLE = "configs/cycles/c1.yaml"'):
         assert needle in src, needle
     last = "".join(nb["cells"][-1]["source"])  # the session ends itself: the GPU is not left running after a cycle
     assert "if RELEASE_GPU_WHEN_DONE:" in last and "nb.release_gpu(wait_seconds=10)" in last
     code = "\n".join("".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code")
-    for frozen in ('"extract"', '"probe"', '"localize"', '"measure"'):
-        assert frozen not in code, frozen
+    for frozen in ('nb.run("extract"', 'nb.run("probe"', 'nb.run("localize"', 'nb.run("measure"'):
+        assert frozen not in code, frozen  # (`cycle probe` is the token probe of the ladder family)
     from rtp.cycle import load_cycle
     import re as _re
 

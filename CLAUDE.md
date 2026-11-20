@@ -55,7 +55,12 @@ Code, comments, docstrings, commits: English only.
   model: text continuation only.
 - The preference level uses ONE readout: the letter-logit difference target − control at the forced position, in
   one token form, averaged over option orders. Answer-path masses, the free position and O5 are diagnostics: they
-  are not homogeneous under a scale change.
+  are not homogeneous under a scale change. Neither is the mean letter mass: a low value LIMITS the conclusions
+  to the forced letter readout, it is not a gate (cycle C0; `ladder-probe` shows which tokens take the rest).
+- A ladder whose first step is a jump (jump index above 0.5) gives no level in evidence units for the brands
+  inside that step, only the ratio name effect / first-step response. "The scale" of a stage pair is not one
+  number by default: read the contrast-family table, and claim a content change only when T1 excludes 0 against
+  every reference.
 - bf16 rounds logits near 20 to a grid of 0.125: letter logits are recomputed in float32 from the final hidden state.
 - A brand whose name starts with an option-letter token ("Acer" → "A") is flagged `letter_collision`.
 - Fictional names can collide with real brands or carry their own pull: check the pulls table; `needs_web_check`.

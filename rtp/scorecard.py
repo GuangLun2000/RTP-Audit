@@ -23,7 +23,7 @@ Kinds of findings, and what each one means for the program:
     budget      time: deferred or failed jobs, how far off the cost model was.
 
 The rules only SAY what a number means. The pass flags are computed in rtp.scale.checks from its own
-constants; the two advisory constants below are not thresholds of any check.
+constants; the advisory constants below are not thresholds of any check.
 """
 
 from __future__ import annotations
@@ -39,6 +39,9 @@ never rises, even if the pooled curve does."""
 FLAT_SE_ADVISE = 2.0
 """A curve whose pooled top response is not above this many of its standard errors is reported as not
 rising: a monotone fit of pure noise is positive in most draws, and its brands then look "beyond the ladder"."""
+BRAND_FREE = ("option position", "fictional names", "evidence, first step", "evidence, top step")
+"""Contrast families without a real brand (rtp/scale/contrast.py): if THEY do not share one multiplier, the
+scale of a stage pair is a choice of reference."""
 IDENTITY_TOL = 1e-6
 """Pure-scale wiring check: relative tolerance of the multipliers, absolute tolerance of a preference level."""
 KINDS = ("bug", "instrument", "research", "pending", "budget")
@@ -125,9 +128,14 @@ def _cells(res: dict[str, Any]) -> list[tuple[str, str, dict[str, Any]]]:
     return out
 
 
+def _share(num_: Any, den: Any) -> str:
+    return pct(num_ / den) if num_ is not None and den else "n/a"
+
+
 def _ladder_findings(scope: str, stratum: str, etype: str, cell: dict[str, Any], max_censored: Any,
-                     change: str) -> list[dict[str, str]]:
-    """One (stratum, evidence type) ladder: flat, patchy, not monotone, too short, too coarse."""
+                     change: str, jump_max: Any = None) -> list[dict[str, str]]:
+    """One (stratum, evidence type) ladder: flat, patchy, not monotone, too short, a jump at the first step,
+    too coarse."""
     out: list[dict[str, str]] = []
     where = f"{stratum}/{etype}"
     key = STEP_KEYS.get(etype)
@@ -169,7 +177,23 @@ def _ladder_findings(scope: str, stratum: str, etype: str, cell: dict[str, Any],
                            + f" until the top response exceeds that percentile ({change})."))
     first = f"{step_label(etype, cell.get('x_first'))} = {num(cell.get('A_first'))} logits"
     low = cell.get("share_in_first_step")
-    if key and cell.get("first_step_resolved") is False:
+    if key and cell.get("first_step_unresolved") and low:
+        second = f"{step_label(etype, cell.get('x_second'))} = {num(cell.get('A_second'))} logits"
+        out.append(finding("instrument", scope,
+                           f"{where}: the ladder does not resolve its first step. The response at the first step "
+                           f"({first}) is already {_share(cell.get('A_first'), cell.get('A_second'))} of the response "
+                           f"at the second ({second}); a response proportional to the difference would give "
+                           f"{_share(cell.get('x_first'), cell.get('x_second'))} (jump index "
+                           f"{num(cell.get('jump_index'))}, limit {num(jump_max)}). {pct(low)} of the brands sit "
+                           f"inside that step: their level is the ratio |name effect| / first-step response (median "
+                           f"{num(cell.get('ratio_to_first_step_median'))}) times the step size, not a reading in x "
+                           f"units.",
+                           f"A finer step in `{key}` helps only if the card can display it and the response then "
+                           f"shrinks with it. Otherwise this evidence acts as a tie-breaker: use a stratum whose "
+                           f"options differ in more than one attribute, or trade the evidence off against a second "
+                           f"attribute so that the response crosses 0 inside the ladder ({change}). Probe on "
+                           f"anchors first; they need no real brand."))
+    elif key and cell.get("first_step_resolved") is False:
         out.append(finding("instrument", scope,
                            f"{where}: the first step is not resolved ({first}): the model does not register it, and "
                            f"{pct(cell.get('share_below_floor'))} of the brands with a level lie below the first step "
@@ -199,22 +223,49 @@ def _anchor_findings(scope: str, ac: dict[str, Any], names: dict[str, Any], limi
                         "Extend the ladder first (see the ladder findings); do not replace names on this evidence.")]
     if ac.get("pass") is not False:
         return []
-    text = (f"fictional names are not neutral anchors: the SD of their preference levels reaches "
-            f"{num(ac.get('max_ratio'))} of the real brands' (limit {num(limit)})")
+    worst = ac.get("worst") or {}
+    cell = f"{worst.get('stratum')}/{worst.get('evidence_type')}" + (" (bare names on the attribute-only curve)"
+                                                                     if worst.get("cross_stratum") else "")
+    text = (f"fictional anchors: the SD of the made-up names' preference levels reaches {num(ac.get('max_ratio'))} "
+            f"of the real brands' (limit {num(limit)})")
+    if worst:
+        text += (f", in {cell}. In logits there: SD of the made-up names' pulls {num(worst.get('sd_pull'))}, SD of "
+                 f"the real name effects {num(worst.get('sd_delta'))} (ratio {num(worst.get('ratio_logit'))})")
     if names:
-        worst = ", ".join(f"{r['name']} ({r['category']}: {num(r['pull'])} logits, {num(r['ratio'])}x a typical real "
-                          f"brand)" for r in (names.get("top") or [])[:3])
-        text += (f"; {names.get('n_ratio_at_least_1')} of {names.get('n_names')} names pull at least as hard as a "
-                 f"typical real brand of their category. Largest: {worst}")
+        top = ", ".join(f"{r['name']} ({r['category']}: {num(r['pull'])} logits, {num(r['ratio'])}x a typical real "
+                        f"brand)" for r in (names.get("top") or [])[:3])
+        text += (f". In the NAME-ONLY stratum (not necessarily the cell above) {names.get('n_ratio_at_least_1')} of "
+                 f"{names.get('n_names')} names pull at least as hard as a typical real brand of their category; "
+                 f"largest there: {top}")
     if n_bound:
         text += f". {n_bound} further cells give only an upper bound (real brands censored) and were not used"
     return [finding("instrument", scope, text + ".",
-                    "Fix the replacement rule in DECISIONS.md first, then replace the names in "
-                    f"data/seeds/placebo_names.yaml ({change}). If the pulls are small in logits and only the ratio "
-                    "is large, the real brands are weak in that cell: read the brand table first.")]
+                    "A ratio of two spreads fails where real names barely matter as well as where made-up names are "
+                    "loud: read the two SDs of every cell (table 'Fictional anchors per cell') before touching a "
+                    "name. Names are replaced only by a rule written in DECISIONS.md beforehand, in "
+                    f"data/seeds/placebo_names.yaml ({change}).")]
 
 
-def model_findings(model: str, res: dict[str, Any], phase: str = "develop") -> list[dict[str, str]]:
+def _tied_gap(rd: dict[str, Any], four: dict[str, Any] | None = None) -> str:
+    """Letter mass on tied items against items with an evidence difference (two-option units), and in the
+    four-option arm when it was measured."""
+    def mean(tied: bool) -> float | None:
+        rows = [r for r in rd.get("by_cell") or [] if r.get("arm") == "pair" and bool(r.get("tied")) == tied]
+        n = sum(r["n_units"] for r in rows)
+        return sum(r["mean_c_forced"] * r["n_units"] for r in rows) / n if n else None
+
+    tied, differs = mean(True), mean(False)
+    text = "" if tied is None or differs is None else (
+        f" On tied items (both options show the same evidence) it is {num(tied)}, on items with an evidence "
+        f"difference {num(differs)}.")
+    if four and four.get("mean_c_forced") is not None:
+        text += f" With four options and the same question it is {num(four['mean_c_forced'])}."
+    return text
+
+
+def model_findings(model: str, res: dict[str, Any], phase: str = "develop",
+                   scaled: dict[float, Any] | None = None) -> list[dict[str, str]]:
+    """``scaled``: mean letter mass of this model's pure-scale variants in the same card, by factor."""
     scope = short(model)
     if res.get("error"):
         return [finding("bug", scope, f"the analysis crashed: {res['error']}",
@@ -226,16 +277,23 @@ def model_findings(model: str, res: dict[str, Any], phase: str = "develop") -> l
     change = "an instrument change" if phase == "develop" else "confirm phase: report it as it is, change nothing"
     rd = checks.get("readout") or {}
     if rd.get("pass") is False:
+        moves = "".join(f" The number moves with scale: with every logit x {c:g} the same model reads {num(v)}."
+                        for c, v in sorted((scaled or {}).items()) if v is not None)
         out.append(finding("instrument", scope,
-                           f"the letter readout is not the model's answer: mean letter mass at the forced position "
-                           f"{num(rd.get('mean_c_forced'))} (needs {num(limits.get('COVERAGE_MIN'))}). No preference "
-                           f"level of this model can be read until this holds.",
-                           "Look at the decoded sample (`gen_text`) and at the letters+names masses of the ladder "
-                           f"stage summary; a change of the prompt or of the prefill is {change}."))
+                           f"readout limited to the forced letter choice: the option letters carry "
+                           f"{num(rd.get('mean_c_forced'))} of the probability after the prefill (flag at "
+                           f"{num(limits.get('COVERAGE_MIN'))}).{_tied_gap(rd, res.get('readout_ctx'))}{moves} The letter-logit difference "
+                           f"is defined whatever the rest of the distribution does, so levels and multipliers are "
+                           f"reported; they describe the choice between the option letters, and which tokens take "
+                           f"the remaining mass is not stored by the ladder stage.",
+                           "Run the token probe (`cycle probe`, notebook cell 7): it lists the tokens that take the "
+                           "mass and the option the greedy continuation ends on. Decide a change of the prompt or of "
+                           f"the prefill on that, not on this mean ({change})."))
     max_censored = limits.get("CENSORED_SHARE_MAX")
     for stratum, etype, cell in _cells(res):
         if "n_category_curves" in cell:  # the name stratum has no ladder of its own
-            out += _ladder_findings(scope, stratum, etype, cell, max_censored, change)
+            out += _ladder_findings(scope, stratum, etype, cell, max_censored, change,
+                                    limits.get("FIRST_STEP_JUMP_MAX"))
     for stratum, _, cell in _cells(res):
         beyond = {t: v["share_censored"] for t, v in (cell.get("on_attr_curve") or {}).items()
                   if stratum == "name" and max_censored is not None and (v.get("share_censored") or 0.0) > max_censored}
@@ -306,9 +364,14 @@ def _c_interval(cell: dict[str, Any]) -> str:
 
 
 def identity_text(ident: dict[str, Any]) -> str:
-    return (f"multipliers {num(ident.get('c_min'), 6)}..{num(ident.get('c_max'), 6)} on {ident.get('n_curves')} "
+    text = (f"multipliers {num(ident.get('c_min'), 6)}..{num(ident.get('c_max'), 6)} on {ident.get('n_curves')} "
             f"curves; largest change of a preference level {num(ident.get('max_abs_theta_diff'), 2)} over "
             f"{ident.get('n_brand_cells')} brand cells; {ident.get('n_flag_changes')} flag changes")
+    if ident.get("n_families"):
+        text += (f"; {ident['n_families']} contrast families (position bias, made-up names, evidence steps, real "
+                 f"names) grew {num(ident.get('family_min'), 6)}..{num(ident.get('family_max'), 6)}, largest |T1| "
+                 f"against any reference {num(ident.get('max_abs_T1'), 2)}")
+    return text
 
 
 def _identity_findings(scope: str, ident: dict[str, Any], c_true: float) -> list[dict[str, str]]:
@@ -320,6 +383,9 @@ def _identity_findings(scope: str, ident: dict[str, Any], c_true: float) -> list
     tol = IDENTITY_TOL * c_true
     ok = (abs(ident["c_min"] - c_true) <= tol and abs(ident["c_max"] - c_true) <= tol
           and (ident.get("max_abs_theta_diff") or 0.0) <= IDENTITY_TOL and not ident.get("n_flag_changes"))
+    if ident.get("n_families"):  # every logit contrast, not only the anchor curves, must grow by c
+        ok = (ok and abs(ident["family_min"] - c_true) <= tol and abs(ident["family_max"] - c_true) <= tol
+              and (ident.get("max_abs_T1") or 0.0) <= IDENTITY_TOL)
     text = f"pure-scale check (every logit x {c_true:g}): {identity_text(ident)}."
     if ok:
         return [finding("research", scope, text + " The level is invariant to scale on this model, as designed (H2, "
@@ -329,7 +395,129 @@ def _identity_findings(scope: str, ident: dict[str, Any], c_true: float) -> list
                     "rtp/models.py `scale_logits` before any other result is read.")]
 
 
-def pair_findings(name: str, res: dict[str, Any], phase: str = "develop") -> list[dict[str, str]]:
+def _cell(r: dict[str, Any]) -> str:
+    return f"{r.get('stratum')}/{r.get('evidence_type')}"
+
+
+def _ti(r: dict[str, Any], value: str = "T1") -> str:
+    return f"{num(r.get(value))}{interval(r.get('lo'), r.get('hi'))}"
+
+
+def _contrast_findings(scope: str, res: dict[str, Any], caveat: str) -> list[dict[str, str]]:
+    """Is the stage change one multiplier? (rtp/scale/contrast.py)"""
+    out: list[dict[str, str]] = []
+    fam = [r for r in res.get("families") or [] if r.get("multiplier") is not None and (r.get("n_categories") or 0) >= 3
+           and r.get("lo") is not None]
+    if fam:
+        by: dict[str, list[float]] = {}
+        for r in fam:
+            by.setdefault(r["family"], []).append(r["multiplier"])
+        ranges = "; ".join(f"{k} {num(min(v))}" + ("" if len(v) == 1 else f" to {num(max(v))}") for k, v in by.items())
+        free = [r for r in fam if r["family"] in BRAND_FREE]
+        verdict = ""
+        if len(free) > 1:
+            low, high = min(free, key=lambda r: r["multiplier"]), max(free, key=lambda r: r["multiplier"])
+            verdict = (f" Among the contrasts without a real brand, one multiplier does not describe this stage pair: "
+                       f"{high['family']} ({_cell(high)}) grew {_ti(high, 'multiplier')}, {low['family']} "
+                       f"({_cell(low)}) {_ti(low, 'multiplier')}, and the two intervals do not overlap."
+                       if high["lo"] > low["hi"] else
+                       " The contrasts without a real brand are compatible with one multiplier (the intervals of "
+                       "the largest and the smallest overlap).")
+        out.append(finding("research", scope,
+                           f"multipliers by contrast family (later stage / earlier stage, geometric mean over "
+                           f"categories; uniform sharpening predicts ONE number): {ranges}.{verdict}",
+                           "If the brand-free contrasts disagree, 'the scale' is a choice of reference: report the "
+                           "table, not one c. " + caveat))
+    moved = [r for r in res.get("counterfactual") or [] if r.get("explained_best") is not None]
+    bare = [r for r in moved if r.get("stratum") == "name"] or sorted(
+        moved, key=lambda r: -abs(r["share_b"] - r["share_a"]))[:1]
+    if bare:
+        parts = "; ".join(
+            f"{_cell(r)} {num(r['share_a'])} -> {num(r['share_b'])}"
+            + (f", the earlier stage sharpened by its measured c = {num(r['c'])} gives {num(r['share_cf'])} "
+               f"({pct(r['explained'])} of the change)" if r.get("explained") is not None else "")
+            + f", the uniform sharpening that comes closest (x {num(r['c_best'])}) {num(r['share_best'])} "
+              f"({pct(r['explained_best'])})" for r in bare)
+        out.append(finding("research", scope,
+                           "raw choice share of real brands with no evidence against them, and what sharpening "
+                           "alone reproduces: " + parts + ".",
+                           "100% = the raw-metric change is scale only. The rest is the name effect growing more "
+                           "(or less) than the other contrasts, the position bias among them. All cells: table 'Raw "
+                           "choice share and uniform sharpening'. " + caveat))
+    return out
+
+
+def _single_reference_findings(scope: str, res: dict[str, Any], caveat: str) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    moved, quiet = [], []
+    for c in pair_cells(res):
+        if c.get("T1_cat_mean") is None or c.get("T1_t_lo") is None:
+            continue
+        label = f"{c.get('stratum')}/{c.get('evidence_type')}" + (" (name on the attr curve)" if c.get("cross_stratum")
+                                                                  else "")
+        text = f"{label} {num(c.get('T1_cat_mean'))}{interval(c.get('T1_t_lo'), c.get('T1_t_hi'))}"
+        (moved if c["T1_t_lo"] > 0 or c["T1_t_hi"] < 0 else quiet).append(text)
+    if moved:
+        out.append(finding("research", scope,
+                           "name effects did NOT grow by the scale factor (T1 = log m - log c, t interval over "
+                           "categories, excludes 0): " + "; ".join(moved) + ". Positive = real names gained more than "
+                           "the scale factor explains (a content change), negative = less.", caveat))
+    if quiet:
+        out.append(finding("research", scope,
+                           "no departure from the scale factor detected (T1 interval includes 0, as uniform sharpening "
+                           "predicts): " + "; ".join(quiet) + ". The width of an interval says how large a content "
+                           "change could have been missed.", caveat))
+    return out
+
+
+def _reference_findings(scope: str, references: list[dict[str, Any]], caveat: str) -> list[dict[str, str]]:
+    """Did the real names grow like the brand-free contrasts? A cell counts as a departure only when its T1
+    interval excludes 0, with one sign, against EVERY reference the design offers."""
+    cells: dict[str, list[dict[str, Any]]] = {}
+    for r in references:
+        if r.get("lo") is not None and r.get("T1") is not None:
+            cells.setdefault(_cell(r), []).append(r)
+
+    def ref(r: dict[str, Any]) -> str:
+        return f"the {r['reference']} of {r['ref_stratum']}/{r['ref_evidence_type']}"
+
+    robust, mixed, quiet = [], [], []
+    for cell, rows in cells.items():
+        lo, hi = min(rows, key=lambda r: r["T1"]), max(rows, key=lambda r: r["T1"])
+        span = f"{cell}: from {_ti(lo)} against {ref(lo)} to {_ti(hi)} against {ref(hi)}"
+        n_out = sum(r["lo"] > 0 or r["hi"] < 0 for r in rows)
+        if all(r["lo"] > 0 for r in rows) or all(r["hi"] < 0 for r in rows):
+            robust.append(span)
+        elif n_out:
+            mixed.append(f"{span} (excludes 0 against {n_out} of {len(rows)} references)")
+        else:
+            quiet.append(span)
+    head = ("T1 = log multiplier of the real names - log multiplier of a reference (the whole anchor curve = the "
+            "project's c, its first step, its top step, the made-up names of the same cell); mean and t interval "
+            "over categories. ")
+    out = []
+    if robust:
+        out.append(finding("research", scope,
+                           "real names did NOT grow like the brand-free contrasts, whichever reference is taken (T1 "
+                           "excludes 0 against every reference; positive = the names gained more): "
+                           + "; ".join(robust) + ".", head + caveat))
+    if mixed:
+        out.append(finding("research", scope,
+                           "real names against the brand-free contrasts, verdict NOT robust to the reference (T1 "
+                           "excludes 0 against some references only): " + "; ".join(mixed) + ".",
+                           head + "No content change is claimed for a cell while the verdict depends on the "
+                           "reference; with many references one interval can exclude 0 by chance. " + caveat))
+    if quiet:
+        out.append(finding("research", scope,
+                           "no departure from uniform sharpening against any reference (every T1 interval includes "
+                           "0): " + "; ".join(quiet) + ". The widths say how large a change could have been missed.",
+                           head + caveat))
+    return out
+
+
+def pair_findings(name: str, res: dict[str, Any], phase: str = "develop",
+                  readout_note: str = "") -> list[dict[str, str]]:
+    """``readout_note``: a sentence added to every result of the pair when a model's readout flag is False."""
     a, b = pair_models(name)
     scope = f"{short(a)} -> {short(b)}" + (" [test]" if name.endswith(" [test]") else "")
     if res.get("error"):
@@ -349,7 +537,8 @@ def pair_findings(name: str, res: dict[str, Any], phase: str = "develop") -> lis
         out.append(finding("research", scope,
                            "scale multiplier c of the anchor curves (fictional names only), per evidence type: "
                            + "; ".join(parts) + ".",
-                           "c > 1 = the later stage is more decisive on that evidence. Not a change of preference."))
+                           "c > 1 = the later stage is more decisive on that evidence. Not a change of preference."
+                           + readout_note))
     if h1.get("range") is not None:
         lo, hi = h1.get("lo_crossed", h1.get("lo")), h1.get("hi_crossed", h1.get("hi"))
         out.append(finding("research", scope,
@@ -363,26 +552,14 @@ def pair_findings(name: str, res: dict[str, Any], phase: str = "develop") -> lis
     elif scale:
         out.append(finding("pending", scope, "H1 (one common scale) needs a rising curve for all three evidence types "
                                              "in both models.", "See the instrument findings of the two models."))
-    moved, quiet = [], []
-    for c in pair_cells(res):
-        if c.get("T1_cat_mean") is None or c.get("T1_t_lo") is None:
-            continue
-        label = f"{c.get('stratum')}/{c.get('evidence_type')}" + (" (name on the attr curve)" if c.get("cross_stratum")
-                                                                  else "")
-        text = f"{label} {num(c.get('T1_cat_mean'))}{interval(c.get('T1_t_lo'), c.get('T1_t_hi'))}"
-        (moved if c["T1_t_lo"] > 0 or c["T1_t_hi"] < 0 else quiet).append(text)
     caveat = ("The intervals cover the choice of categories only; run-to-run training noise is unknown until the seed "
-              "replicates of cycles C2/C3." + (" Exploratory (develop phase)." if phase == "develop" else ""))
-    if moved:
-        out.append(finding("research", scope,
-                           "name effects did NOT grow by the scale factor (T1 = log m - log c, t interval over "
-                           "categories, excludes 0): " + "; ".join(moved) + ". Positive = real names gained more than "
-                           "the scale factor explains (a content change), negative = less.", caveat))
-    if quiet:
-        out.append(finding("research", scope,
-                           "no departure from the scale factor detected (T1 interval includes 0, as uniform sharpening "
-                           "predicts): " + "; ".join(quiet) + ". The width of an interval says how large a content "
-                           "change could have been missed.", caveat))
+              "replicates of cycles C2/C3." + (" Exploratory (develop phase)." if phase == "develop" else "")
+              + readout_note)
+    if res.get("references"):
+        out += _reference_findings(scope, res["references"], caveat)
+    else:  # a summary written before the reference table existed: the whole-curve reference alone
+        out += _single_reference_findings(scope, res, caveat)
+    out += _contrast_findings(scope, res, caveat)
     left = res.get("tiers_left_out") or {}
     if left:
         out.append(finding("pending", scope, f"compared on tiers {res.get('tiers_compared')} only; left out because "
@@ -411,6 +588,31 @@ def budget_findings(card: dict[str, Any]) -> list[dict[str, str]]:
     return out
 
 
+def _readout(res: dict[str, Any]) -> dict[str, Any]:
+    return ((res or {}).get("checks") or {}).get("readout") or {}
+
+
+def scaled_readout(model: str, models: dict[str, Any]) -> dict[float, Any]:
+    """Mean letter mass of the pure-scale variants of ``model`` in the card, by factor."""
+    out = {}
+    for other, res in models.items():
+        c = scale_variant(model, other)
+        if c is not None and _readout(res).get("mean_c_forced") is not None:
+            out[c] = _readout(res)["mean_c_forced"]
+    return out
+
+
+def readout_note(pair: str, models: dict[str, Any]) -> str:
+    """What a pair's results are conditional on when a model's readout flag is False."""
+    suffix = " [test]" if pair.endswith(" [test]") else ""
+    low = [(m, _readout(models.get(m + suffix))) for m in pair_models(pair)]
+    low = [(m, rd) for m, rd in low if rd.get("pass") is False]
+    if not low:
+        return ""
+    return (" Conditional on the forced letter readout: letter mass "
+            + ", ".join(f"{num(rd.get('mean_c_forced'))} ({short(m)})" for m, rd in low) + ".")
+
+
 def findings(card: dict[str, Any]) -> list[dict[str, str]]:
     """Every finding of a scorecard, ordered by kind (bugs first)."""
     phase = card.get("phase", "develop")
@@ -418,9 +620,9 @@ def findings(card: dict[str, Any]) -> list[dict[str, str]]:
     models = card.get("models") or {}
     for model, res in models.items():
         if variant_of(model, models) is None:  # a pure-scale variant repeats every finding of its base model
-            out += model_findings(model, res, phase)
+            out += model_findings(model, res, phase, scaled_readout(model, models))
     for name, res in (card.get("pairs") or {}).items():
-        out += pair_findings(name, res, phase)
+        out += pair_findings(name, res, phase, readout_note(name, models))
     for model, info in (card.get("open_set") or {}).items():
         if info.get("coverage_warning"):
             out.append(finding("instrument", short(model),
@@ -449,9 +651,9 @@ def findings_markdown(items: list[dict[str, str]]) -> list[str]:
 
 
 # --------------------------------------------------------------------------- tables: one model
-def _verdict(block: dict[str, Any] | None, detail: str) -> str:
+def _verdict(block: dict[str, Any] | None, detail: str, failed: str = "FAIL") -> str:
     state = (block or {}).get("pass")
-    word = "pass" if state is True else "FAIL" if state is False else "not evaluated"
+    word = "pass" if state is True else failed if state is False else "not evaluated"
     return word + (f" ({detail})" if detail else "")
 
 
@@ -465,9 +667,10 @@ def verdict_rows(models: dict[str, Any]) -> list[str]:
                    if ac.get("n_rows_bound_only") else "")
         rows.append({
             "model": short(model), "form": res.get("letter_form"), "tiers": ", ".join(res.get("tiers") or []),
-            "readout": _verdict(rd, f"letter mass {num(rd.get('mean_c_forced'))}" if rd else ""),
-            "ladder": _verdict(ld, f"{pct(ld.get('share_censored'))} beyond top; {ld.get('n_curves_flat')} of "
-                                   f"{ld.get('n_curves')} curves flat" if ld else ""),
+            "readout": _verdict(rd, f"letter mass {num(rd.get('mean_c_forced'))}" if rd else "", "LIMITED"),
+            "ladder": _verdict(ld, f"{pct(ld.get('share_censored'))} beyond top; "
+                                   f"{pct(ld.get('share_first_step_unresolved'))} inside an unresolved first step; "
+                                   f"{ld.get('n_curves_flat')} of {ld.get('n_curves')} curves flat" if ld else ""),
             "anchors": _verdict(ac, anchors),
             "channel": _verdict(cc, f"median {num(cc.get('median_abs_diff_level'))} levels"
                                 if cc.get("median_abs_diff_level") is not None else "")})
@@ -498,6 +701,16 @@ def model_section(res: dict[str, Any]) -> list[str]:
                   f"correlation {num(rd.get('corr_L_mass'))}, median gap {num(rd.get('median_abs_diff_L_mass'))} "
                   f"logits; median |position bias| {num(rd.get('median_abs_order_bias'))} logits (averaged out over the "
                   f"two orders); {pct(rd.get('share_letter_collision'))} of units with a letter-colliding name.", ""]
+    by_cell = (rd.get("by_cell") or []) + ((res.get("readout_ctx") or {}).get("by_cell") or [])
+    if by_cell:
+        lines += ["**Letter mass by kind of item** (tied = both options show the same evidence; it also moves with "
+                  "scale, so compare cells within a model, not models):", ""]
+        lines += table(by_cell, [
+            ("options", lambda r: "two" if r.get("arm") == "pair" else "four"), ("tier", "tier"),
+            ("target", lambda r: "fictional" if r.get("family") == "anchor" else "real brand"), ("stratum", "stratum"),
+            ("evidence", lambda r: "tied" if r.get("tied") else "differs"), ("units", "n_units"),
+            ("letter mass", "mean_c_forced"), ("below the flag", lambda r: pct(r.get("share_low_coverage"))),
+            ("free position", "mean_c_free")]) + [""]
     ladders = [r for r in res.get("ladders") or [] if r.get("arm", "pair") == "pair"]
     lines += ["**The ruler** (pooled anchor curve between two fictional names; logits per step):", ""]
     lines += table(ladders, [("stratum", "stratum"), ("evidence", "evidence_type"),
@@ -506,12 +719,18 @@ def model_section(res: dict[str, Any]) -> list[str]:
                              ("monotone fit", "A_fit"),
                              ("brands in this step", lambda r: pct(r.get("share_of_brands")))])
     cells = [{"stratum": s, "evidence_type": t, **c} for s, t, c in _cells(res)]
-    lines += ["", "**Brands on the ruler** (name effect in logits; preference level in x units):", ""]
+    lines += ["", "**Brands on the ruler** (name effect in logits; preference level in x units; jump index: 0 = the "
+                  "response grows in proportion to the difference, 1 = any difference gives the full response. Where "
+                  "the first step is unresolved, read the level in ladder levels: inside the first step it is |name "
+                  "effect| / first-step response):", ""]
     lines += table(cells, [
         ("stratum", "stratum"), ("evidence", "evidence_type"), ("brands", "n_brands"),
         ("median name effect", "delta_median"), ("negative", lambda r: pct(r.get("share_delta_negative"))),
         ("median level [q25, q75]", _level), ("beyond top", lambda r: pct(r.get("share_censored"))),
         ("inside first step", lambda r: pct(r.get("share_in_first_step"))),
+        ("jump index of the first step", lambda r: "" if r.get("jump_index") is None else
+         num(r["jump_index"]) + (" (unresolved)" if r.get("first_step_unresolved") else "")),
+        ("median |level| in ladder levels", "abs_level_median"),
         ("no level (flat curve)", lambda r: pct(r.get("share_on_flat_curve"))), ("category curves rising", _rising)])
     bare = next((c for s, _, c in _cells(res) if s == "name" and c.get("on_attr_curve")), None)
     if bare:
@@ -534,6 +753,16 @@ def model_section(res: dict[str, Any]) -> list[str]:
             ("category", "category"), ("name", "name"),
             ("pull (logits)", lambda r: f"{num(r.get('pull'))} ± {num(r.get('pull_se'), 2)}"),
             ("median real brand", "typical_real"), ("ratio", "ratio")])
+    anchors = [r for r in ((res.get("checks") or {}).get("anchor_clean") or {}).get("rows") or []
+               if r.get("arm", "pair") == "pair"]
+    if anchors:
+        lines += ["", "**Fictional anchors per cell** (spread of the made-up names against the spread of the real "
+                      "brands; the flag is decided on the largest ratio of levels that is not a bound):", ""]
+        lines += table(anchors, [
+            ("stratum", lambda r: f"{r.get('stratum')}" + (" (on attr curve)" if r.get("cross_stratum") else "")),
+            ("evidence", "evidence_type"), ("SD ratio of levels", "ratio"),
+            ("SD of pulls (logits)", "sd_pull"), ("SD of real name effects (logits)", "sd_delta"),
+            ("ratio in logits", "ratio_logit"), ("note", lambda r: "bound only" if r.get("bound_only") else "")])
     if res.get("choice_set"):
         rows = [{"cell": k, **v} for k, v in res["choice_set"].items()]
         lines += ["", "**Two options vs four** (same brands; four-option effects re-centred on the same zero):", ""]
@@ -555,23 +784,30 @@ def _level_change(r: dict[str, Any]) -> str:
     return num(r.get("median_d_theta")) + (f" (n={r.get('n_d_theta')})" if r.get("n_d_theta") else "")
 
 
-def pair_section(name: str, res: dict[str, Any]) -> list[str]:
+def pair_section(name: str, res: dict[str, Any], note: str = "") -> list[str]:
+    """``note``: what the results are conditional on (``readout_note``)."""
     if res.get("error"):
         return [f"comparison failed: {res['error']}", ""]
     a, b = pair_models(name)
-    lines = [f"Tiers compared: {', '.join(res.get('tiers_compared') or [])}; letter form `{res.get('letter_form')}`."]
+    lines = [f"Tiers compared: {', '.join(res.get('tiers_compared') or [])}; letter form `{res.get('letter_form')}`."
+             + note]
     if scale_variant(a, b) is not None:
         lines.append(f"Pure-scale identity: {identity_text(res.get('identity') or {})}.")
-    lines += ["", "c = ratio of the anchor curves (scale); m = ratio of the summed name effects of real brands; "
-                  "T1 = log m - log c (0 under uniform sharpening; mean and t interval over categories). "
-                  "Intervals of c and m: crossed bootstrap (categories and fictional names).", ""]
+    lines += ["", "c = ratio of the anchor curves summed over steps and categories (scale); m = the same ratio of the "
+                  "summed name effects of real brands; T1 = log m - log c (0 under uniform sharpening). 'T1 pooled' "
+                  "is log m - log c of the two printed numbers; 'T1 by category' is the mean of the same statistic "
+                  "computed per category, with its t interval (the primary interval). They differ when categories "
+                  "differ in size. Intervals of c, m and the pooled T1: crossed bootstrap (categories and fictional "
+                  "names).", ""]
     lines += table(pair_cells(res), [
         ("stratum", lambda r: f"{r.get('stratum')}" + (" (on attr curve)" if r.get("cross_stratum") else "")),
         ("evidence", "evidence_type"), ("brands", "n_entities"),
         ("c", lambda r: num(r.get("c")) + _c_interval(r)),
         ("m", lambda r: num(r.get("m")) + interval(r.get("m_lo_crossed", r.get("m_lo")),
                                                    r.get("m_hi_crossed", r.get("m_hi")))),
-        ("T1", lambda r: num(r.get("T1_cat_mean")) + interval(r.get("T1_t_lo"), r.get("T1_t_hi"))),
+        ("T1 pooled", lambda r: num(r.get("T1")) + interval(r.get("T1_lo_crossed", r.get("T1_lo")),
+                                                           r.get("T1_hi_crossed", r.get("T1_hi")))),
+        ("T1 by category", lambda r: num(r.get("T1_cat_mean")) + interval(r.get("T1_t_lo"), r.get("T1_t_hi"))),
         ("categories", "n_cat_T1"), ("median change of level", _level_change),
         ("name effects negative in A", "n_negative_a")])
     if res.get("shape"):
@@ -580,6 +816,28 @@ def pair_section(name: str, res: dict[str, Any]) -> list[str]:
         lines += table(res["shape"], [("stratum", "stratum"), ("evidence", "evidence_type"),
                                       ("step", lambda r: step_label(r["evidence_type"], r.get("x"))),
                                       ("A", "A_a"), ("B", "A_b"), ("ratio", "ratio"), ("ratio / c", "ratio_over_c")])
+    variant = scale_variant(a, b) is not None
+    if res.get("families") and not variant:
+        lines += ["", "**Multipliers by contrast family** (B / A; geometric mean over categories with its t interval; "
+                      "uniform sharpening predicts the same number in every row):", ""]
+        lines += table(res["families"], [
+            ("stratum", "stratum"), ("family", "family"), ("evidence", "evidence_type"),
+            ("multiplier", lambda r: _ti(r, "multiplier")), ("categories", "n_categories")])
+    if res.get("references") and not variant:
+        lines += ["", "**T1 against every reference** (log multiplier of the real names - log multiplier of the "
+                      "reference; mean over categories with its t interval; 0 = the names grew like the reference):", ""]
+        lines += table(res["references"], [
+            ("real names of", _cell), ("reference", "reference"),
+            ("of", lambda r: f"{r.get('ref_stratum')}/{r.get('ref_evidence_type')}"), ("T1", _ti),
+            ("categories", "n_categories")])
+    if res.get("counterfactual"):
+        lines += ["", "**Raw choice share and uniform sharpening** (real brand vs fictional control, no evidence "
+                      "against the brand; single letter form; 'sharpened' = A with every logit multiplied by c):", ""]
+        lines += table(res["counterfactual"], [
+            ("stratum", "stratum"), ("evidence", "evidence_type"), ("A", "share_a"), ("B", "share_b"),
+            ("measured c", "c"), ("A sharpened by c", "share_cf"), ("explained", lambda r: pct(r.get("explained"))),
+            ("best factor", "c_best"), ("A sharpened by it", "share_best"),
+            ("explained at best", lambda r: pct(r.get("explained_best")))])
     if res.get("raw"):
         lines += ["", "**Scale-dependent metrics, A -> B** (what a raw-metric study would report as the change):", ""]
         lines += table(res["raw"], [("stratum", "stratum"), ("evidence", "evidence_type"),
@@ -637,7 +895,7 @@ def scorecard_markdown(card: dict[str, Any]) -> str:
     if not pairs:
         lines += ["(no pair has both models analysed yet)", ""]
     for name, res in pairs.items():
-        lines += [f"### {name}", ""] + pair_section(name, res)
+        lines += [f"### {name}", ""] + pair_section(name, res, readout_note(name, models))
     if card.get("open_set"):
         lines += ["## Open question (which brand does the model name unprompted)", ""]
         lines += open_set_rows(card["open_set"]) + [""]

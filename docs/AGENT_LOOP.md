@@ -31,6 +31,9 @@ that runs. Settings are in cell 1: `CYCLE` (the cycle file), `CONFIG` (its run c
    own process. After every job the CPU analysis runs and the scorecard is rewritten, so an interrupted
    session still leaves usable results. A job that no longer fits the remaining budget is deferred; a stage that
    reaches the deadline stops between two shards and resumes later. Re-running cell 7 continues the cycle.
+   With `TOKEN_PROBE = True` the cell then runs `cycle probe`: on a small sample of items per checkpoint, the
+   tokens that take the probability the option letters do not, and where such answers end (a diagnostic, not
+   a stage; its tables are in the feedback bundle).
    A cycle never mixes results: when a job's existing stage was built by other code, items or settings (stale),
    or was interrupted under another GPU or library version, cell 6 stops before any GPU time and names the jobs.
    For the first session after an instrument change set `AFTER_INSTRUMENT_CHANGE = True` in cell 1: it rebuilds
@@ -94,12 +97,13 @@ Give the bundle file to the agent. There is no need to paste the notebook output
 
    | Finding | What it means | What changes (develop phase) |
    |---|---|---|
-   | The letter readout is not the model's answer (letter mass below 0.9) | No level of this model can be read | Prompt or prefill (`rtp/data/ladder_items.py`, `rtp/measure/parse.py`): a change of the GPU closure, every stage is re-measured |
+   | Readout limited to the forced letter choice (letter mass below 0.9) | Levels and multipliers describe the choice between the option letters; the mean moves with scale and with the share of tied items, so it limits, it does not void | Read the per-cell table and the token probe (`cycle probe`) first. Only if the rest of the mass declines the choice: the question wording (`rtp/data/ladder_items.py`), a change of the GPU closure |
+   | A ladder does not resolve its first step (jump index above 0.5, brands inside it) | The evidence acts as a tie-breaker there: the level is the ratio name effect / first-step response, not a reading in evidence units | A stratum whose options differ in more than one attribute, or a trade-off ladder; a finer step only if the card can show it. Probe on anchors first |
    | A curve does not rise | The evidence does not move the model in that stratum | How the evidence is rendered, or the type is reported as unusable; a longer ladder does not help |
    | Brands beyond the top step (more than 10%) | The ladder is too short: those levels are bounds | Larger steps in `ladder.rating_deltas` / `price_deltas` / `review_ratios`; the finding gives the 95th percentile of the name effects against the top response |
-   | Most brands inside the first step | The ladder is too coarse near 0 | A finer first step, about the median name effect |
+   | Most brands inside the first step (jump index at most 0.5) | The ladder is too coarse near 0 | A finer first step, about the median name effect |
    | Pooled curve not monotone | Neighbouring steps are closer than the noise | Merge or widen those steps (ruler table) |
-   | Fictional anchors fail (SD ratio at least 0.5) | Made-up names are not neutral | Fix the replacement rule in DECISIONS.md, then replace names in `data/seeds/placebo_names.yaml` |
+   | Fictional anchors fail (SD ratio at least 0.5) | Made-up names are loud, OR real names barely matter in the cell that decides the check (the finding names it) | Compare the two spreads per cell first; names are replaced only by a rule written in DECISIONS.md beforehand (`data/seeds/placebo_names.yaml`) |
    | Fictional anchors not evaluated (real brands censored) | The ratio is only a bound | Extend the ladder first; do not replace names on this evidence |
    | Open question: low mass on catalogue brands | N_eff describes a minority of answers | Read the sampled texts; prompt wording of `rtp/measure/open_set.py` |
    | Estimator or report gap (a number the decision needs is missing) | The view is incomplete | `rtp/scale`, `rtp/analyze.py`, `rtp/scorecard.py`: outside every GPU closure, `cycle report` recomputes from stored scores, no GPU time |

@@ -333,7 +333,8 @@ def _rules(rows, errors) -> list[str]:
 
 
 SUMMARY_LINES, SUMMARY_CHARS = 90, 7000  # per stage summary in the feedback bundle
-SCORECARD_LINES, SCORECARD_CHARS = 700, 90000  # the newest scorecard goes in whole (6 models on e1: ~400 lines)
+SCORECARD_LINES, SCORECARD_CHARS = 700, 90000
+PROBE_LINES, PROBE_CHARS = 80, 9000  # per model: the token probe's tables and examples  # the newest scorecard goes in whole (6 models on e1: ~400 lines)
 
 
 def _scorecards(cfg: Config, n: int = 3) -> list[Path]:
@@ -520,6 +521,11 @@ def build_feedback(cfg: Config, tail: int = 60, unseal: bool = False) -> Path:
                   "```", ""]
     for fp in sorted((rdir / "format_probe").glob("*/summary.md")):  # dev only by construction
         lines += [f"### {fp.parent.name} / format-probe", "", "```", _head(fp, SUMMARY_LINES, SUMMARY_CHARS), "```", ""]
+    probes = sorted((rdir / "ladder_probe").glob("*/summary.md"))  # dev only by construction
+    if probes:
+        lines += ["## Token probe (which tokens take the mass the option letters do not; dev sample)", ""]
+        for fp in probes:
+            lines += [_head(fp, PROBE_LINES, PROBE_CHARS), ""]
     adir = rdir / "analysis"
     shown = set()  # models and pairs whose tables are already in the newest scorecard above
     if newest:

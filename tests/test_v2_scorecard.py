@@ -114,18 +114,27 @@ def test_stage_pair_findings_state_scale_content_and_what_is_still_unknown(run):
     assert all(f"{t} 1." in scale for t in ("rating", "price", "reviews")) and "Not a change of preference" in scale
     h1 = next(t for t in found if t.startswith("H1"))
     assert "judged against the seed replicates" in h1
-    moved = next(t for t in found if "did NOT grow by the scale factor" in t)  # truth: log 1.3 = 0.26
-    assert "name/rating (name on the attr curve) 0.2" in moved
+    pair = card["pairs"][f"{SMOKE} -> {OTHER}"]
+    bare = {(r["reference"], r["ref_evidence_type"]): r for r in pair["references"] if r["stratum"] == "name"}
+    assert bare[("whole curve (c)", "rating")]["T1"] == pytest.approx(0.26, abs=0.1)  # truth: log 1.3 = 0.26
+    assert bare[("whole curve (c)", "rating")]["lo"] > 0 and len(bare) == 10  # 3 curves x 3 references + the names
+    moved = next(t for t in found if "name/none: from" in t)  # reported against every reference, never against one
+    assert "against the" in moved and "T1 = log multiplier of the real names" in moved
     assert "run-to-run training noise is unknown" in moved and "Exploratory" in moved
+    families = next(t for t in found if t.startswith("multipliers by contrast family"))
+    assert "real brand names" in families and "evidence, first step 1." in families
+    share = next(t for t in found if t.startswith("raw choice share"))
+    assert "name/none" in share and "of the change" in share
     md = scorecard.scorecard_markdown(card)
     assert "**Shape of the ruler**" in md and "**Scale-dependent metrics, A -> B**" in md
+    assert "| T1 pooled | T1 by category |" in md and "**T1 against every reference**" in md
     row = next(r for r in card["pairs"][f"{SMOKE} -> {OTHER}"]["raw"] if r["stratum"] == "name")
     assert row["choice_share_prob_b"] > row["choice_share_prob_a"]  # the raw metric rises with scale and content
     # the same pair with no content change: the name effects follow the scale factor
     write_stage(cfg, panel, OTHER, "core", replace(world, gamma=1.7, noise_seed=2), note="scale only")
     quiet = texts(card_of(cfg, [SMOKE, OTHER], [(SMOKE, OTHER)]), "research")
-    assert any("no departure from the scale factor" in t and "name/rating" in t for t in quiet)
-    assert not any("did NOT grow by the scale factor" in t for t in quiet)
+    assert any("no departure from uniform sharpening against any reference" in t and "attr/rating" in t for t in quiet)
+    assert not any("whichever reference is taken" in t for t in quiet)  # no content change is claimed
 
 
 def test_anchor_check_ignores_ratios_that_are_only_bounds():
@@ -188,10 +197,16 @@ def test_feedback_bundle_carries_the_newest_scorecard_whole(run):
     log_path = run_dir(cfg.name) / "events.jsonl"  # two commands that started and wrote no end record
     log_path.write_text("".join(json.dumps({"time": "t", "kind": "start", "message": " ".join(argv), "data": {"argv": argv}})
                                 + "\n" for argv in (["ladder", "--tier", "ext"], ["feedback", "--config", "x"])))
+    probe = run_dir(cfg.name) / "ladder_probe" / "m"  # the token probe's tables travel in the bundle too
+    probe.mkdir(parents=True)
+    (probe / "summary.md").write_text("# Ladder probe: m (tier core)\n\n| kind of item | items |\n")
     bundle = ops.build_feedback(cfg).read_text()
     assert "truncated" not in bundle.split("## Stage status")[0]
     for needle in ("### t (newest)", "## Findings", "## Stage pairs", "**Shape of the ruler**", "## Jobs (budget ledger)",
-                   "instrument finding(s)", "section Findings of the newest scorecard"):
+                   "instrument finding(s)", "section Findings of the newest scorecard",
+                   "**Multipliers by contrast family**", "**T1 against every reference**",
+                   "**Raw choice share and uniform sharpening**", "**Letter mass by kind of item**",
+                   "**Fictional anchors per cell**", "## Token probe", "# Ladder probe: m (tier core)"):
         assert needle in bundle, needle
     unfinished = bundle.split("## Commands that never finished")[1].split("\n## ")[0]
     assert "ladder --tier ext" in unfinished and "feedback" not in unfinished  # the command writing the bundle is no casualty

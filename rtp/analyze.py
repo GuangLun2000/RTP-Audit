@@ -144,10 +144,24 @@ def headline(res: dict[str, Any]) -> dict[str, Any]:
     ladder), whether that curve rises at all (``curve_rises``) and how many category curves do not
     (``n_flat_category_curves``), the median name effect of real brands (``delta_median``, logits), the median
     preference level in natural units over the brands that have one (``theta_median``), and the shares of
-    brands with a negative name effect, beyond the ladder (censored) or on a flat curve."""
+    brands with a negative name effect, beyond the ladder (censored) or on a flat curve.
+
+    Resolution of the first step: ``jump_index`` of the pooled curve (rtp.scale.checks.jump_index: 0 = a
+    straight line through the origin, 1 = a jump) and ``first_step_unresolved`` (above the limit of the ladder
+    check); ``abs_level_median`` is the median |level| in LADDER LEVELS over the brands with a level, which for
+    a brand inside the first step is |name effect| / response at the first step
+    (``ratio_to_first_step_median``: the median over those brands only)."""
+    from rtp.scale.checks import FIRST_STEP_JUMP_MAX, first_steps
+
     out: dict[str, Any] = {}
     curves, ent = res.get("curves"), res.get("entities")
     if isinstance(curves, pd.DataFrame) and len(curves):
+        for (_, stratum, etype), step in first_steps(curves).items():
+            cell = out.setdefault(f"{stratum}/{etype}", {})
+            cell["A_second"], cell["x_second"] = _r(step["a2"]), _r(step["x2"])
+            cell["jump_index"] = _r(step["jump_index"])
+            if cell["jump_index"] is not None:
+                cell["first_step_unresolved"] = bool(step["jump_index"] > FIRST_STEP_JUMP_MAX)
         for (stratum, etype), g in curves.groupby(["stratum", "evidence_type"], sort=True):
             cell = out.setdefault(f"{stratum}/{etype}", {})
             pooled = g[g["category"] == "(all)"].sort_values("level")
@@ -179,6 +193,9 @@ def headline(res: dict[str, Any]) -> dict[str, Any]:
                 cell["share_below_floor"] = _r(have["below_floor"].astype(bool).mean())
                 placed = have[~have["censored"].astype(bool)]  # same binning as the ruler table (ladder_rows)
                 cell["share_in_first_step"] = _r((placed["theta_level"].abs() <= 1).sum() / len(have))
+                cell["abs_level_median"] = _r(placed["theta_level"].abs().median())
+                inside = placed.loc[placed["theta_level"].abs() <= 1, "theta_level"].abs()
+                cell["ratio_to_first_step_median"] = _r(inside.median()) if len(inside) else None
             cell["share_on_flat_curve"] = _r(g["status"].eq("flat_curve").mean())
             if stratum == "name":  # a bare name has no ladder of its own: its level on the attribute-only curves
                 cross = {}
@@ -269,11 +286,15 @@ def raw_rows(res: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def compact_checks(checks: dict[str, Any]) -> dict[str, Any]:
-    """The checks without the long per-name table of the anchor check (``rows``): what the scorecard shows.
-    The full tables stay in ``checks.json``."""
+    """The checks as the scorecard shows them. Of the anchor check's table (one row per stratum and evidence
+    type) only the columns the scorecard prints are kept; the full tables stay in ``checks.json``."""
+    keep = ("arm", "stratum", "evidence_type", "cross_stratum", "ratio", "sd_pull", "sd_delta", "ratio_logit",
+            "bound_only", "n_fictional", "n_real")
     out: dict[str, Any] = {}
     for name, block in checks.items():
-        out[name] = {k: v for k, v in block.items() if k != "rows"} if isinstance(block, dict) else block
+        if isinstance(block, dict) and "rows" in block:
+            block = {**block, "rows": [{k: r.get(k) for k in keep} for r in block["rows"]]}
+        out[name] = block
     return out
 
 
@@ -349,6 +370,8 @@ def analyze_model(cfg: Config, model_id: str, split: str = "dev", unseal: bool =
     if CTX_TIER in tiers:  # the same letter form as the two-option arm: one readout per model
         ctx = _run_scale(cfg, tiers, (CTX_TIER,), split, unseal, form=_form(res))
         _write_tables(out_dir, ctx, prefix="ctx_")
+        # the same question with four options: is the letter mass a matter of the two-option format?
+        summary["readout_ctx"] = _jsonable((ctx.get("checks") or {}).get("readout") or {})
         summary["choice_set"] = choice_set_agreement(res, ctx)
     io.write_json(out_dir / "summary.json", _jsonable(summary))
     io.atomic_write_text(out_dir / "summary.md", model_markdown(model_id, split, summary))
@@ -366,6 +389,7 @@ def compare(cfg: Config, model_a: str, model_b: str, split: str = "dev", unseal:
     core + ext is a different estimate from a core-only one, so the stored tables cannot simply be filtered.
     """
     from rtp import scale
+    from rtp.scale import contrast
 
     check_split_access(split, unseal)
     if analyze_model(cfg, model_a, split, unseal) is None or analyze_model(cfg, model_b, split, unseal) is None:
@@ -406,6 +430,16 @@ def compare(cfg: Config, model_a: str, model_b: str, split: str = "dev", unseal:
     summary = {"tiers_compared": list(shared), "tiers_left_out": {m: v for m, v in dropped.items() if v},
                "letter_form": _form(a), "summary": _jsonable(res.get("summary", {})), "identity": identity(res),
                "shape": shape_rows(res), "raw": raw_contrast(a, b)}
+    logs = contrast.family_logs(a, b)  # is the stage change ONE multiplier? (rtp/scale/contrast.py)
+    summary["families"] = contrast.family_rows(logs)
+    summary["references"] = contrast.reference_rows(logs)
+    mult = [r["multiplier"] for r in summary["families"]]
+    if mult:  # a pure-scale variant must show its factor in EVERY family, and T1 = 0 against every reference
+        summary["identity"].update(
+            family_min=float(min(mult)), family_max=float(max(mult)), n_families=len(mult),
+            max_abs_T1=float(max((abs(r["T1"]) for r in summary["references"]), default=0.0)))
+    summary["counterfactual"] = contrast.share_counterfactual(a["units"], b["units"],
+                                                              (res.get("summary") or {}).get("scale") or [])
     io.write_json(out_dir / "summary.json", _jsonable(summary))
     io.atomic_write_text(out_dir / "summary.md", pair_markdown(model_a, model_b, split, summary))
     io.write_json(meta_path, _jsonable(meta))
@@ -418,7 +452,9 @@ def identity(res: dict[str, Any]) -> dict[str, Any]:
     brand's preference level among the ``n_brand_cells`` cells that have a level in both models and are not
     censored. ``n_flag_changes``: cells whose censoring flag, or whether they have a level at all, differs
     between the two models. For a ``@scale=c`` variant the multipliers all equal c, no level moves and no
-    flag changes; a result with ``n_curves`` or ``n_brand_cells`` of 0 proves nothing."""
+    flag changes; a result with ``n_curves`` or ``n_brand_cells`` of 0 proves nothing. ``compare`` adds the
+    range of the contrast-family multipliers (``family_min``, ``family_max``; rtp/scale/contrast.py) and the
+    largest |T1| against any reference: for a pure-scale variant c and 0."""
     out: dict[str, Any] = {"c_min": None, "c_max": None, "n_curves": 0, "max_abs_theta_diff": None,
                            "n_brand_cells": 0, "n_flag_changes": None}
     sc = res.get("scale")

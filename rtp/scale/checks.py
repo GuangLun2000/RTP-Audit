@@ -18,6 +18,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from rtp.data.constants import LADDER_TYPES
 from rtp.scale.anchor import ALL, KEYS
 from rtp.scale.theta import anchor_clean
 
@@ -33,9 +34,46 @@ top of the ladder, which squeezes their SD: the ratio of such a row is an upper 
 fine); a bound below the limit is still a pass."""
 CENSORED_SHARE_MAX = 0.10
 """Ladder passes when at most this share of brand cells is worth more than the whole ladder."""
+FIRST_STEP_JUMP_MAX = 0.5
+"""A ladder resolves its first step when the jump index of the pooled curve (``jump_index``) is at most this,
+i.e. when the response at the first step is closer to a response proportional to the difference than to a pure
+jump. Above it, the level of a brand INSIDE the first step is the ratio name effect / first-step response
+times the step size, not a reading in evidence units; the ladder check then fails when more than
+``CENSORED_SHARE_MAX`` of the brand cells are in that position. Typed ladders only (rating, price, reviews):
+the composite ladder is a bracket, not a ruler. Added after cycle C0 (DECISIONS.md)."""
 COVERAGE_MIN = 0.9
-"""Readout passes when the mean letter mass at the forced position is at least this (same value as
-rtp.measure.ladder.LOW_COVERAGE)."""
+"""Readout flag: the mean letter mass at the forced position is at least this (same value as
+rtp.measure.ladder.LOW_COVERAGE). The mean is NOT invariant to scale (cycle C0: 0.675 -> 0.874 when every
+logit of the same model is doubled) and depends on the share of tied items among the loaded tiers, so a False
+flag does not stop anything: it limits the conclusions to the forced letter readout (objective, section 3.4),
+and the per-cell table says where the mass is missing."""
+
+
+def jump_index(x1: float, a1: float, x2: float, a2: float) -> float:
+    """How far the first ladder step is from a graded response: ``(a1 / a2 - x1 / x2) / (1 - x1 / x2)`` for
+    the responses a1, a2 at the first two steps x1 < x2. 0 = a straight line through the origin (the response
+    is proportional to the size of the difference), 1 = a pure jump (any difference gives the response of the
+    second step), above 1 = the response falls after the first step, below 0 = the first step is under-weighted
+    (a threshold). A ratio of two responses of ONE model, so a scale change leaves it unchanged. NaN when the
+    second response is not positive or the steps are not ordered."""
+    if not (x2 > x1 > 0 and a2 > 0) or a1 != a1:
+        return float("nan")
+    return float((a1 / a2 - x1 / x2) / (1.0 - x1 / x2))
+
+
+def first_steps(curves: pd.DataFrame) -> dict[tuple[str, str, str], dict[str, float]]:
+    """Per typed pooled curve (arm, stratum, evidence_type): the first two steps (``x1``, ``a1``, ``x2``,
+    ``a2``; raw pooled means) and their ``jump_index``."""
+    out: dict[tuple[str, str, str], dict[str, float]] = {}
+    pooled = curves[(curves["category"] == ALL) & curves["evidence_type"].isin(LADDER_TYPES)]
+    for key, g in pooled.groupby(["arm", "stratum", "evidence_type"], sort=False):
+        g = g.sort_values("level")
+        if len(g) < 2:
+            continue
+        x1, x2 = (float(v) for v in g["x"].iloc[:2])
+        a1, a2 = (float(v) for v in g["A_raw"].iloc[:2])
+        out[tuple(key)] = {"x1": x1, "a1": a1, "x2": x2, "a2": a2, "jump_index": jump_index(x1, a1, x2, a2)}
+    return out
 
 
 def _num(value: Any) -> Any:
@@ -105,6 +143,7 @@ def _anchor_clean(fictional: pd.DataFrame, entities: pd.DataFrame) -> dict[str, 
     usable, bound = defined[~defined["bound_only"]], defined[defined["bound_only"]]
     unidentified = fictional[~fictional["identified"].astype(bool)]
     worst = float(usable["ratio"].max()) if len(usable) else float("nan")
+    worst_row = usable.loc[usable["ratio"].idxmax()] if len(usable) else None
     proven = bool(len(bound)) and bool((bound["ratio"] < ANCHOR_SD_RATIO_MAX).all())  # a bound below the limit passes
     flag = bool(worst < ANCHOR_SD_RATIO_MAX) if len(usable) else (True if proven else None)
     return {
@@ -113,6 +152,9 @@ def _anchor_clean(fictional: pd.DataFrame, entities: pd.DataFrame) -> dict[str, 
         "n_rows_bound_only": int(len(bound)),
         "max_ratio_bound_only": _num(float(bound["ratio"].max()) if len(bound) else float("nan")),
         "n_names_unidentified": int(len(unidentified)), "max_ratio": _num(worst),
+        # the cell the flag is decided in: a ratio fails where the real names barely matter, whatever the names
+        "worst": None if worst_row is None else {k: _num(worst_row[k]) for k in (
+            "arm", "stratum", "evidence_type", "cross_stratum", "ratio", "sd_pull", "sd_delta", "ratio_logit")},
         # the same comparison in logits (SD of pulls / SD of name effects): no curve, nothing censored
         "max_ratio_logit": _num(float(table["ratio_logit"].max()) if table["ratio_logit"].notna().any() else float("nan")),
         "pass": flag,
@@ -125,18 +167,27 @@ def _ladder(curves: pd.DataFrame, entities: pd.DataFrame) -> dict[str, Any]:
         dropped=("n_pairs_dropped", "sum")).reset_index()
     own = entities[entities["status"].isin(["ok", "censored"])]  # brand cells converted with their own curve
     flat = entities[entities["status"].eq("flat_curve")]
+    steps = first_steps(curves)
+    n_unresolved = 0
     rows = []
     for key, g in entities[entities["status"].isin(["ok", "censored", "flat_curve"])].groupby(
             ["arm", "stratum", "evidence_type"], sort=False):
         conv = g[g["status"] != "flat_curve"]
         curve_key = per_curve[(per_curve["arm"] == key[0]) & (per_curve["stratum"] == key[1])
                               & (per_curve["evidence_type"] == key[2])]
+        inside = conv[~conv["censored"].astype(bool) & (conv["theta_level"].abs() <= 1)]
+        jump = (steps.get(tuple(key)) or {}).get("jump_index", float("nan"))
+        unresolved = bool(jump > FIRST_STEP_JUMP_MAX) if jump == jump else None
+        n_unresolved += len(inside) if unresolved else 0
         rows.append({**dict(zip(("arm", "stratum", "evidence_type"), key)), "n_entities": len(conv),
                      "n_entities_on_flat_curves": int(len(g) - len(conv)),
                      "n_curves": int(len(curve_key)), "n_curves_flat": int((~(curve_key["top"] > 0)).sum()),
                      "share_censored": float(conv["censored"].mean()) if len(conv) else float("nan"),
-                     "share_below_floor": float(conv["below_floor"].mean()) if len(conv) else float("nan")})
+                     "share_below_floor": float(conv["below_floor"].mean()) if len(conv) else float("nan"),
+                     "share_in_first_step": float(len(inside) / len(conv)) if len(conv) else float("nan"),
+                     "jump_index": jump, "first_step_unresolved": unresolved})
     share = float(own["censored"].mean()) if len(own) else float("nan")
+    share_unresolved = float(n_unresolved / len(own)) if len(own) else float("nan")
     return {
         "n_curves": int(len(per_curve)),
         "share_monotone_raw": _num(float(per_curve["monotone_raw"].mean()) if len(per_curve) else float("nan")),
@@ -146,13 +197,15 @@ def _ladder(curves: pd.DataFrame, entities: pd.DataFrame) -> dict[str, Any]:
         "n_entities_on_flat_curves": int(len(flat)),
         "n_pairs_dropped": int(per_curve["dropped"].sum()),
         "n_entities": int(len(own)), "share_censored": _num(share),
+        # brand cells inside the first step of a ladder whose first step is a jump, not a graded response
+        "share_first_step_unresolved": _num(share_unresolved),
         "share_below_floor": _num(float(own["below_floor"].mean()) if len(own) else float("nan")),
         "dropped": {"flat_curve": int(len(flat)), "no_curve": int(entities["status"].eq("no_curve").sum()),
                     "no_value": int(entities["status"].eq("no_value").sum()),
                     "no_zero_units": int(entities["status"].eq("no_zero_units").sum()),
                     "cross_stratum_only": int(entities["status"].eq("cross_stratum").sum())},
         "by_cell": records(pd.DataFrame(rows)),
-        "pass": bool(share <= CENSORED_SHARE_MAX) if len(own) else None,
+        "pass": bool(share <= CENSORED_SHARE_MAX and share_unresolved <= CENSORED_SHARE_MAX) if len(own) else None,
     }
 
 
@@ -160,6 +213,11 @@ def _readout(units: pd.DataFrame) -> dict[str, Any]:
     mass = units[units["L_mass"].notna()]
     coverage = float(units["c_forced"].mean()) if len(units) else float("nan")
     diff = (mass["L"] - mass["L_mass"]).to_numpy(dtype=float)
+    cells = []
+    for key, g in units.assign(tied=units["d"] == 0).groupby(["arm", "tier", "family", "stratum", "tied"], sort=True):
+        cells.append({**dict(zip(("arm", "tier", "family", "stratum", "tied"), key)), "n_units": len(g),
+                      "mean_c_forced": float(g["c_forced"].mean()), "mean_c_free": float(g["c_free"].mean()),
+                      "share_low_coverage": float((g["c_forced"] < COVERAGE_MIN).mean())})
     return {
         "n_units": int(len(units)), "mean_c_forced": _num(coverage),
         "mean_c_free": _num(float(units["c_free"].mean()) if len(units) else float("nan")),
@@ -170,6 +228,9 @@ def _readout(units: pd.DataFrame) -> dict[str, Any]:
         "share_letter_collision": _num(float(units["letter_collision"].mean()) if len(units) else float("nan")),
         "median_abs_order_bias": _num(float(units["order_bias"].abs().median()) if units["order_bias"].notna().any()
                                       else float("nan")),
+        # where the letter mass is missing: tied items (d = 0, the two options show the same evidence) against
+        # items with an evidence difference, per tier (the tiers differ in their share of tied items)
+        "by_cell": records(pd.DataFrame(cells)),
         "pass": bool(coverage >= COVERAGE_MIN) if len(units) else None,
     }
 
@@ -194,14 +255,20 @@ def condition_checks(units: pd.DataFrame, curves: pd.DataFrame, entities: pd.Dat
         below the first resolved step (the ladder cannot tell them from 0). Curves that never rise are
         counted apart (``n_curves_flat``; their brand cells have no preference level and are NOT censored):
         a flat curve means the evidence does not move the model, which a longer ladder would not cure.
-    ``readout``: is the letter readout the model's answer? Mean letter mass at the forced position (pass at
-        least ``COVERAGE_MIN``), agreement of ``L`` with the answer-path readout ``L_mass`` on the diagnostic
+        Second condition of the flag: at most ``CENSORED_SHARE_MAX`` of the brand cells lie inside the first
+        step of a typed ladder whose pooled curve jumps there (``jump_index`` above ``FIRST_STEP_JUMP_MAX``;
+        ``share_first_step_unresolved``, and per cell ``jump_index`` / ``share_in_first_step``). A ladder
+        that is a straight line below its first step passes however small the name effects are.
+    ``readout``: how much of the answer is on the option letters? Mean letter mass at the forced position
+        (flag: at least ``COVERAGE_MIN``; a False flag limits the conclusions to the forced letter readout, it
+        does not void them: the mean moves with scale), the same per cell (``by_cell``: tier, family,
+        stratum, tied or not), agreement of ``L`` with the answer-path readout ``L_mass`` on the diagnostic
         sample, share of units with a letter-colliding name.
     """
     return {
         "thresholds": {"COMMON_CHANNEL_MAX_MEDIAN_DIFF": COMMON_CHANNEL_MAX_MEDIAN_DIFF,
                        "ANCHOR_SD_RATIO_MAX": ANCHOR_SD_RATIO_MAX, "CENSORED_SHARE_MAX": CENSORED_SHARE_MAX,
-                       "COVERAGE_MIN": COVERAGE_MIN, "provisional": True},
+                       "COVERAGE_MIN": COVERAGE_MIN, "FIRST_STEP_JUMP_MAX": FIRST_STEP_JUMP_MAX, "provisional": True},
         "common_channel": _common_channel(entities),
         "anchor_clean": _anchor_clean(fictional, entities),
         "ladder": _ladder(curves, entities),

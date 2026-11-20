@@ -145,7 +145,7 @@ def run_smoke(config_path: str = "configs/smoke.yaml", resume: bool = False, ove
 
     # ---- one cycle: ladder readout (model and pure-scale variant), open-set, analysis, scorecard
     from rtp import io
-    from rtp.cycle import CycleSpec, Job, cycle_dir, run_cycle
+    from rtp.cycle import CycleSpec, Job, cycle_dir, run_cycle, run_probe
     from rtp.paths import stage_dir
 
     if not cfg.ladder.enabled:
@@ -185,7 +185,18 @@ def run_smoke(config_path: str = "configs/smoke.yaml", resume: bool = False, ove
                            f"(expected {SCALE:g}), largest change of a preference level "
                            f"{ident['max_abs_theta_diff']} (expected 0), {ident['n_flag_changes']} brand cell(s) "
                            f"changed their censoring or lost their level (expected 0)")
+    if ident.get("n_families") and (abs(ident["family_min"] - SCALE) > SCALE_TOL
+                                    or abs(ident["family_max"] - SCALE) > SCALE_TOL or ident["max_abs_T1"] > SCALE_TOL):
+        raise SmokeFailure(f"pure-scale identity violated in the contrast families: multipliers "
+                           f"{ident['family_min']}..{ident['family_max']} (expected {SCALE:g}), largest |T1| "
+                           f"{ident['max_abs_T1']} (expected 0)")
     info = io.read_json(dirs[1] / io.DONE_FILE)
+    # the token probe next to the cycle (a diagnostic, not a stage): one process per checkpoint
+    rc = step("token probe", lambda: run_probe(spec, sets=overrides, env={"RTP_EVENTS_PATH": str(events_path)},
+                                               n_units=4))
+    probe = run_dir(cfg.name) / "ladder_probe" / model_slug(model_id) / "ladder_probe.json"
+    if rc != 0 or not probe.exists():
+        raise SmokeFailure(f"the token probe failed (exit {rc}; expected {probe}): see the feedback bundle")
 
     total = time.time() - t_start
     log.info("SMOKE PASSED in %.1fs on %s", total, hw)

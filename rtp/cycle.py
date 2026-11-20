@@ -538,10 +538,41 @@ def run_report(spec: CycleSpec, sets: list[str] | None = None, unseal: bool = Fa
     return cdir / "scorecard.md"
 
 
+def probe_models(cfg: Config, spec: CycleSpec) -> list[str]:
+    """The checkpoints the token probe reads: every model of the cycle's dev ladder jobs that is not a variant
+    of another (a pure-scale variant has the same tokens in the same order)."""
+    from rtp import registry
+
+    out = []
+    for j in spec.jobs:
+        if j.stage == "ladder" and j.split == "dev" and registry.base_model_id(j.model) == j.model \
+                and j.model not in out:
+            out.append(j.model)
+    return out
+
+
+def run_probe(spec: CycleSpec, sets: list[str] | None = None, env: dict[str, str] | None = None,
+              n_units: int | None = None) -> int:
+    """`ladder-probe` on every checkpoint of the cycle, one process per model (rtp/measure/ladder_probe.py):
+    a diagnostic next to the cycle, not one of its jobs. Returns 0 when every probe ran. ``n_units``: units
+    per kind of item (default: the probe's own)."""
+    from rtp.notebook import gpu_overrides, stream
+
+    cfg = cycle_config(spec, sets)
+    check_phase(cfg, spec)
+    ovr = gpu_overrides() + [x for s in sets or stored_sets(cfg.name, spec) for x in ("--set", s)]
+    failed = 0
+    for model in probe_models(cfg, spec):
+        argv = [sys.executable, "-m", "rtp.cli", *ovr, "ladder-probe", "--config", spec.config, "--model", model]
+        argv += ["--n-units", str(n_units)] if n_units else []
+        failed += stream(argv, env=env, label=f"rtp.cli ladder-probe {model}") != 0
+    return 0 if not failed else 7
+
+
 def latest_scorecards(cfg: Config, n: int = 3) -> list[Path]:
     paths = sorted((run_dir(cfg.name) / "cycles").glob("*/scorecard.md"), key=lambda p: p.stat().st_mtime)
     return paths[-n:]
 
 
 __all__ = ["BudgetExceeded", "CycleError", "CycleSpec", "Job", "MAX_BUDGET_HOURS", "load_cycle", "plan", "run_cycle",
-           "run_plan", "run_report", "latest_scorecards"]
+           "run_plan", "run_probe", "run_report", "latest_scorecards"]

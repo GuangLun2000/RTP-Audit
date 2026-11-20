@@ -177,7 +177,9 @@ python -m rtp.cli analyze --config configs/e1.yaml --pair allenai/Llama-3.1-Tulu
 CPU only; a rebuildable view under `runs/<name>/analysis/`, never a hashed stage. Per model: unit values, anchor
 curves, the pulls of the fictional names, name effects and preference levels per brand (converted and direct),
 raw scale-dependent metrics, and the instrument checks. Per pair: scale multipliers per evidence type, the
-pooled null statistics with intervals, content residuals. `cycle run` calls it after every job.
+pooled null statistics with intervals, content residuals, and whether the stage change is ONE multiplier: the
+multiplier of every contrast family (option position, made-up names, evidence steps, real names), T1 against
+every reference, and the raw choice share under uniform sharpening. `cycle run` calls it after every job.
 
 ### `cycle`
 
@@ -185,6 +187,7 @@ pooled null statistics with intervals, content residuals. `cycle run` calls it a
 python -m rtp.cli cycle plan   --cycle configs/cycles/c0.yaml
 python -m rtp.cli cycle run    --cycle configs/cycles/c0.yaml
 python -m rtp.cli cycle report --cycle configs/cycles/c0.yaml   # re-run the analysis, rewrite the scorecard
+python -m rtp.cli cycle probe  --cycle configs/cycles/c0.yaml   # token probe on the cycle's checkpoints
 ```
 
 - `plan` prices every job with the cost model (seconds per prompt token and per item plus model load,
@@ -258,7 +261,7 @@ Open the notebook straight from GitHub: [Open in Colab](https://colab.research.g
 4. Smoke and the tests.
 5. `build-data`.
 6. `cycle plan`: the priced job list.
-7. `cycle run`, then `status`. Re-run this cell to resume.
+7. `cycle run`, then the token probe (`cycle probe`) and `status`. Re-run this cell to resume.
 8. The scorecard.
 9. **Feedback bundle** for the coding agent.
 

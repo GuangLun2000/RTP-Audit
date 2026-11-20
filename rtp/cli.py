@@ -19,7 +19,8 @@ from rtp.log import setup_logging
 log = logging.getLogger("rtp.cli")
 
 # every command that loads the model given by --model (the develop / confirm guard covers all of them)
-MODEL_STAGES = ("ladder", "open-set", "measure", "format-probe", "open-ended", "extract", "probe", "localize")
+MODEL_STAGES = ("ladder", "open-set", "ladder-probe", "measure", "format-probe", "open-ended", "extract", "probe",
+                "localize")
 FUTURE_STAGES = {"train": "batch 2: content-neutral and dose-planting LoRA runs",
                  "freeze": "batch 3: instrument freeze before the confirmation phase"}
 
@@ -61,6 +62,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("open-set", help="closed-set brand distribution of an open question, and sampled answers")
     _add_model_stage_args(p)
 
+    p = sub.add_parser("ladder-probe", help="diagnostic: the tokens that take the probability the option letters do "
+                                            "not, and where such answers end (small dev sample; not a stage)")
+    p.add_argument("--config", required=True)
+    p.add_argument("--model", required=True)
+    p.add_argument("--tier", default="core", choices=["core", "ext", "ctx"])
+    p.add_argument("--n-units", type=int, default=40, help="units per kind of item, every option order (default 40)")
+    p.add_argument("--prompt-mode", default="auto", choices=["auto", "chat", "base"])
+
     p = sub.add_parser("analyze", help="CPU: preference levels, anchor curves and checks per model; stage pairs")
     p.add_argument("--config", required=True)
     p.add_argument("--model", action="append", default=[], help="model id (repeatable); default: every model "
@@ -70,8 +79,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--split", default="dev", choices=["dev", "test"])
     p.add_argument("--unseal", action="store_true", help="required to analyse the sealed test split")
 
-    p = sub.add_parser("cycle", help="one budgeted GPU session: plan (price the jobs), run, report (scorecard)")
-    p.add_argument("action", choices=["plan", "run", "report"])
+    p = sub.add_parser("cycle", help="one budgeted GPU session: plan (price the jobs), run, report (scorecard), "
+                                     "probe (token diagnostic on the cycle's models)")
+    p.add_argument("action", choices=["plan", "run", "report", "probe"])
     p.add_argument("--cycle", required=True, help="cycle file, e.g. configs/cycles/c0.yaml")
     p.add_argument("--restart", action="store_true",
                    help="run: start the cycle over (forget the code state and overrides recorded when it started)")
@@ -277,6 +287,8 @@ def _dispatch(args: argparse.Namespace) -> int:
         if args.action == "report":
             cycle.run_report(spec, sets=args.set, unseal=args.unseal)
             return 0
+        if args.action == "probe":
+            return cycle.run_probe(spec, sets=args.set)
         return cycle.run_cycle(spec, restart=args.restart, unseal=args.unseal, sets=args.set,
                                budget_hours=args.budget_hours, redo_stale=args.redo_stale)
 
@@ -332,6 +344,10 @@ def _dispatch(args: argparse.Namespace) -> int:
 
         run_measure(cfg, args.model, split=args.split, unseal=args.unseal, force=args.force,
                     prompt_mode=args.prompt_mode)
+    elif args.stage == "ladder-probe":
+        from rtp.measure.ladder_probe import run_ladder_probe
+
+        run_ladder_probe(cfg, args.model, tier=args.tier, n_units=args.n_units, prompt_mode=args.prompt_mode)
     elif args.stage == "format-probe":
         from rtp.measure.format_probe import run_format_probe
 

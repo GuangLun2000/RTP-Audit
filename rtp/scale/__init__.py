@@ -16,6 +16,8 @@ Pure CPU, pandas in and out; no model is loaded and torch is never imported.
     raw        the scale-dependent metrics of prior work, on the same units
     checks     the four single-model conditions as numbers
     decompose  model A -> model B: scale multiplier, null model "uniform sharpening", residuals
+    contrast   model A -> model B: is the change ONE multiplier? contrast families, T1 against every
+               reference, raw choice share under uniform sharpening
 
 ``analyze_model`` runs the single-model part; ``compare_models`` takes two of its results.
 """

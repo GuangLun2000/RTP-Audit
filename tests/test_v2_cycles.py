@@ -51,6 +51,27 @@ def test_cycle_files_in_the_repo_are_valid_and_capped():
     assert [j.label for j in c0.jobs][:2] == [f"ladder-core {TULU_SFT}", "ladder-core allenai/Llama-3.1-Tulu-3-8B-DPO"]
     assert not any("Olmo" in j.model or j.model == TULU_FINAL for n in ("c0", "c1")
                    for j in cycle.load_cycle(f"configs/cycles/{n}.yaml").jobs)
+    c1 = cycle.load_cycle("configs/cycles/c1.yaml")
+    assert {j.tier for j in c1.jobs if j.stage == "ladder"} == {"core", "ctx", "ext"}
+    assert "context tier" in c1.cut_order[-1]  # cheap and discriminating: cut last (cycle C0)
+
+
+def test_the_token_probe_reads_each_checkpoint_of_a_cycle_once(tmp_path, work_dir, monkeypatch):
+    from rtp import notebook
+
+    cfg_path, cfg = _write_cfg(tmp_path)
+    spec = cycle.load_cycle(_write_cycle(tmp_path, cfg_path, jobs=[
+        {"stage": "ladder", "tier": "core", "models": [SMOKE, f"{SMOKE}@scale=2", TULU_SFT]},
+        {"stage": "ladder", "tier": "ext", "models": [SMOKE]}, {"stage": "open-set", "models": [SMOKE]}]))
+    assert cycle.probe_models(cfg, spec) == [SMOKE, TULU_SFT]  # no variant, no checkpoint twice
+    calls = []
+    monkeypatch.setattr(notebook, "gpu_overrides", lambda: [])
+    monkeypatch.setattr(notebook, "stream", lambda argv, env=None, label=None: calls.append(argv) or 0)
+    assert cycle.run_probe(spec) == 0
+    assert [c[c.index("ladder-probe"):] for c in calls] == [
+        ["ladder-probe", "--config", str(cfg_path), "--model", m] for m in (SMOKE, TULU_SFT)]
+    monkeypatch.setattr(notebook, "stream", lambda argv, env=None, label=None: 1)
+    assert cycle.run_probe(spec) == 7
 
 
 def test_cycle_file_validation(tmp_path):
@@ -120,7 +141,7 @@ def test_confirmation_models_are_refused_until_the_freeze(tmp_path, work_dir):
             phase.check_model_allowed(cfg, m)
     assert cli_main(["ladder", "--config", str(cfg_path), "--model", TULU_FINAL]) == 4  # refused before any load
     # EVERY command that loads a model refuses it, the legacy and frozen ones included
-    for stage in ("open-set", "measure", "open-ended", "extract", "probe", "localize", "format-probe"):
+    for stage in ("open-set", "ladder-probe", "measure", "open-ended", "extract", "probe", "localize", "format-probe"):
         assert cli_main([stage, "--config", str(cfg_path), "--model", TULU_FINAL]) == 4, stage
     # the model lists cannot be emptied from the command line, and the project's own set holds under any config
     assert cli_main(["--set", "confirm_models=[]", "ladder", "--config", str(cfg_path), "--model", TULU_FINAL]) == 4
@@ -293,7 +314,7 @@ def test_scorecard_renders_and_reports_changes():
     card["changes"], card["compared_with"] = changes, "c0"
     md = cycle.scorecard_markdown(card)
     for needle in ("# Scorecard: cycle c1", "**Question.** Q?", "phase **develop**", "| ladder-core m | done | 10 min |",
-                   "deferred", "## Findings", "the letter readout is not the model's answer", "FAIL",
+                   "deferred", "## Findings", "readout limited to the forced letter choice", "LIMITED",
                    "1 of 2 jobs are not done", "## What changed since cycle c0", "Keep the full card?", "1. ctx tier"):
         assert needle in md, needle
     assert md.index("## Findings") < md.index("## Instrument checks per model") < md.index("## Jobs (budget ledger)")

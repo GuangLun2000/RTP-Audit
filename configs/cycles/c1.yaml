@@ -1,32 +1,38 @@
-# Cycle C1: Tulu 3 SFT -> DPO on the full instrument (develop phase; exploratory by construction:
-# this stage pair was already seen in the first pilot).
+# Cycle C1: Tulu 3 SFT -> DPO on the tiers C0 did not measure (develop phase; exploratory by construction:
+# this stage pair was already seen in the first pilot). Rewritten after C0 (docs/CYCLES.md): the items are
+# unchanged (ladder version 1); the rules its results are judged by were written down before it ran
+# (DECISIONS.md, "After cycle C0"). The core stages of C0 are reused; `cycle probe` adds the token probe.
 name: c1
 config: configs/e1.yaml
 phase: develop
 question: >-
-  On Tulu 3 SFT -> DPO: do the four conditions of the instrument hold, do rating, price and review evidence
-  rescale by the same factor, and what is left of the name effects once that factor is removed? Does the
-  preference level depend on the choice set (two options vs four)?
-budget_hours: 6
+  On Tulu 3 SFT and DPO: is the full-card stratum a graded ruler where the attribute-only stratum is not
+  (jump index of the first step at most 0.5)? Does the letter mass return with four options (the gap belongs to
+  the two-option format) or stay low (it belongs to tied evidence)? Which tokens take the rest, and where do
+  those answers end? Does the open question sharpen like the choice items do?
+budget_hours: 3
 jobs:
-  - stage: ladder
+  - stage: ladder  # measured in C0 and reused; the pure-scale variant keeps the wiring identity in this scorecard
     tier: core
+    models: [allenai/Llama-3.1-Tulu-3-8B-SFT, allenai/Llama-3.1-Tulu-3-8B-DPO,
+             "allenai/Llama-3.1-Tulu-3-8B-SFT@scale=2"]
+  - stage: ladder
+    tier: ctx
     models: [allenai/Llama-3.1-Tulu-3-8B-SFT, allenai/Llama-3.1-Tulu-3-8B-DPO]
   - stage: ladder
     tier: ext
-    models: [allenai/Llama-3.1-Tulu-3-8B-SFT, allenai/Llama-3.1-Tulu-3-8B-DPO]
-  - stage: ladder
-    tier: ctx
     models: [allenai/Llama-3.1-Tulu-3-8B-SFT, allenai/Llama-3.1-Tulu-3-8B-DPO]
   - stage: open-set
     models: [allenai/Llama-3.1-Tulu-3-8B-SFT, allenai/Llama-3.1-Tulu-3-8B-DPO]
 pairs:
   - [allenai/Llama-3.1-Tulu-3-8B-SFT, allenai/Llama-3.1-Tulu-3-8B-DPO]
+  - [allenai/Llama-3.1-Tulu-3-8B-SFT, "allenai/Llama-3.1-Tulu-3-8B-SFT@scale=2"]
 decisions:
-  - "Keep the full-card and composite strata in the confirmation runs, or report the attribute-only stratum alone?"
-  - "Which preference level is primary for the confirmation phase (converted is the default; direct is the check)."
-  - "Is the instrument ready for the noise-band and planting cycles, or does it need another revision?"
+  - "Ruler (rule fixed before this cycle): jump index of the pooled full-card rating and price curves at most 0.5 in both models -> the full-card stratum is the primary stratum of ladder v2. Otherwise v2 gets a trade-off ladder (two attributes in opposite directions, so the response crosses 0 inside the ladder), probed on anchors first."
+  - "Readout (rule fixed before this cycle): four-option letter mass at least 0.9 in both models -> the gap belongs to the two-option format; below -> it belongs to tied evidence. The token probe then says whether the rest is a wrapped answer (keep the prompt, report per cell) or a declined choice (v2 states the two-way choice in the question, same sentence at every level)."
+  - "Fictional names: none is replaced on C0 or C1 numbers; the replacement rule is written in DECISIONS.md before ladder v2 is measured."
+  - "One collected instrument change (ladder v2) after this cycle, or straight to the noise-band cycles?"
 cut_order:
-  - "the four-option context tier"
-  - "open-set on both models"
+  - "open-set on DPO"
   - "the extension tier on DPO, then on SFT"
+  - "the four-option context tier (cheap and the most discriminating: cut last)"

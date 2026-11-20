@@ -16,7 +16,7 @@ and the number of runs per training cycle follows from it.
 | Cycle | Phase | Question | Jobs | Predicted GPU time |
 |---|---|---|---|---|
 | C0 shakedown | develop | Does the forced letter readout work; are the ladders monotone and long enough; what does a pass cost? | Tulu 3 SFT and DPO on `core`; `SFT@scale=2` wiring check; open-set on SFT | 43 min |
-| C1 Tulu SFT→DPO | develop | Do the four conditions hold; do rating, price and review evidence rescale alike; what is left after the scale factor; does θ depend on the choice set? | both models on `core`, `ext` and `ctx`; open-set on both | 1.3 h (50 min if `core` is current from C0) |
+| C1 Tulu SFT→DPO | develop | (rewritten after C0) Is the full-card stratum a graded ruler where the attribute-only one is not; does the letter mass return with four options; which tokens take the rest; is the stage change one multiplier; does the open question sharpen like the choice items? | `core` reused from C0; both models on `ctx` and `ext`; open-set on DPO; token probe on both | about 40 min at the rate measured in C0 |
 | C2 neutral seeds, parent SFT | develop | Run-to-run noise band of θ and b; is generic DPO sharpening close to pure scale? | 25-minute training benchmark; 5 seeds × (train + `core`) | guess: 3 to 4.5 h |
 | C3 neutral seeds, parent DPO | develop | Noise band for the DPO→RLVR comparison | 5 seeds × (train + `core`) | guess: 2.5 to 3.7 h |
 | C4a, C4b dose planting | develop | Dose-response, specificity, detection limit of a planted preference (θ vs raw metrics) | 3 doses × 3 seeds × (planted + twin); seed 1 of every dose first | guess: 8 to 13 h in two sessions |
@@ -32,7 +32,7 @@ freeze and unseal code (batch 3).
 | Cycle | Conclusions its scorecard supports | Not yet, and why |
 |---|---|---|
 | C0 | Is the letter readout the model's answer; does each evidence type move the model; where the brands sit on each ladder (too short, too coarse); do fictional names stay neutral; the pure-scale wiring identity on an 8B model; raw metrics move under a pure ×2 scale while every level stays; real cost per token | Nothing about SFT → DPO beyond a first look: `core` only, no direct readings, and the instrument may change |
-| C1 | Tulu 3 SFT → DPO, exploratory: c per evidence type and its spread (H1); T1 per stratum (did name effects grow by the scale factor); change of level in evidence units; direct vs converted level; two options vs four; raw metrics of the two stages next to c | No claim against training noise (no seed replicates before C2/C3); not confirmatory (this pair was seen in the pilot); the share of a raw-metric change explained by scale is batch 3 |
+| C1 | Tulu 3 SFT → DPO, exploratory: is the full-card stratum a graded ruler (jump index of the first step); letter mass with four options against two, and the tokens that take the rest (token probe); the multiplier of every contrast family and T1 against every reference; how much of the raw choice-share change sharpening alone reproduces; direct vs converted level; the open question on both stages | No claim against training noise (no seed replicates before C2/C3); not confirmatory (this pair was seen in the pilot); no level in evidence units where the first step is unresolved |
 | C2, C3 | Run-to-run band of c, T1 and the levels under content-neutral training; whether generic DPO sharpening is close to pure scale | The band comes from LoRA runs; the public stages are full fine-tunes (reported at 1× and 2× the band) |
 | C4 | H2: a planted preference raises the target's level with the dose, twins and non-targets stay in the band; detection limit of the level vs raw metrics | LoRA runs on a development checkpoint; the design is fixed when batch 2 is written |
 | C6 | Confirmatory, both families: DPO → RLVR; SFT → DPO in Olmo 3. H1 and H3 against the band | Dev categories only |
@@ -98,10 +98,14 @@ Entry template:
   - Pure-scale identity on the 8B model: multipliers 2 on all three curves, largest level change 0.
   - Open question, SFT: N_eff 5.14 (name) and 4.29 (recommend); sampled N_eff 4.51 at T = 1, 2.25 at T = 0.5.
 - Budget: predicted 41 min, actual 15 min; calibration k = 0.38. GPU time does not limit instrument iteration.
-- Decision (PI): pending. Proposed: do not run C1 on the unchanged ext tier as a decision cycle (one attribute
-  differs there too, so the same curve shape is expected); run a short probe cycle first.
-- Change (instrument version, DECISIONS.md line, code): no instrument change yet. Operations fixes in 72b1fae
-  (peft / torchao on Colab, full results disk is a doctor FAIL, bundle download cell).
-- Next cycle: proposed probe C0b on the two development models: store the non-letter tokens at the forced
-  position; anchors at smaller steps and on a trade-off grid (two attributes in opposite directions); the ext
-  anchors unchanged as a prediction test; the open question on DPO.
+- Decision (PI, 2026-11-20): no instrument change yet. First make the report answer what C0 could not, then
+  measure the tiers that are already built (ext, ctx) under rules written down in advance, then ONE collected
+  change (ladder v2).
+- Change (instrument version, DECISIONS.md line, code): ladder version stays 1, the C0 stages stay valid.
+  DECISIONS.md "After cycle C0": the readout flag limits instead of voiding; the ladder check also requires a
+  resolved first step (jump index at most 0.5; the core tier of both models now fails it); the anchor finding
+  names its cell; contrast families, T1 against every reference and the raw-share counterfactual
+  (`rtp/scale/contrast.py`); the token probe (`cycle probe`). Operations fixes in 72b1fae.
+- Next cycle: C1 as rewritten in `configs/cycles/c1.yaml`: ext and ctx on both development models, the open
+  question on DPO, the token probe; about 40 min of GPU time. `cycle report --cycle configs/cycles/c0.yaml`
+  rewrites the C0 scorecard with the new tables at no GPU cost.
