@@ -303,7 +303,7 @@ def run_cycle(spec: CycleSpec, restart: bool = False, unseal: bool = False, sets
     here and passed on to every stage. ``env``: extra environment of the stage processes."""
     from rtp import analyze
     from rtp.config import apply_overrides
-    from rtp.data.build import build_data
+    from rtp.datafiles import ensure_data
     from rtp.notebook import gpu_overrides, stream
 
     cfg = apply_overrides(load_config(spec.config), sets) if restart else cycle_config(spec, sets)
@@ -311,7 +311,7 @@ def run_cycle(spec: CycleSpec, restart: bool = False, unseal: bool = False, sets
         from rtp.data.splits import SealedSplitError
 
         raise SealedSplitError(f"cycle '{spec.name}' reads the sealed test split: pass --unseal deliberately")
-    build_data(cfg)
+    ensure_data(cfg)  # builds the items, or rebuilds them when a file listed in the manifest was lost
     cdir = cycle_dir(cfg, spec)
     meta_path = cdir / "run_meta.json"
     now_code = code_state()

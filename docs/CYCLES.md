@@ -109,3 +109,26 @@ Entry template:
 - Next cycle: C1 as rewritten in `configs/cycles/c1.yaml`: ext and ctx on both development models, the open
   question on DPO, the token probe; about 40 min of GPU time. `cycle report --cycle configs/cycles/c0.yaml`
   rewrites the C0 scorecard with the new tables at no GPU cost.
+
+### C1 (2026-11-20, digest_20261120T124043Z, commit 68e5822): partial, an operations failure
+- Question: as in `configs/cycles/c1.yaml` (full-card ruler, letter mass with four options, token probe, open
+  question on DPO).
+- What failed: `dev/ladder_core.jsonl` and `dev/ladder_ext.jsonl` were not on Drive. In C0 Drive was full
+  (doctor: 0 GiB free); the item files were written to the local Drive cache and the two largest never reached
+  Drive, while the data record and the manifest did. `build-data` trusted the record and skipped, so both `ext`
+  jobs, both token probes and every analysis failed. The C0 `scores.parquet` of all three core stages are on
+  Drive (checked 2026-11-21). The Colab pytest failure was a test that assumed it does not run on Colab.
+- What ran (stage records; no per-cell analysis): four options (`ctx`), letter mass at the forced position SFT
+  0.748, DPO 0.660 (two options, `core`: 0.675, 0.625). Under the rule fixed before the cycle (at least 0.9 in
+  both models: the gap belongs to the two-option format) the gap belongs to the items, not to the number of
+  options; the legacy four-option cards, whose options always differed, gave 0.94 to 0.98. Free generation on
+  the four-option items: SFT opens with a refusal in 50% of the decoded sample (core: 1.5%), DPO 2.3%. Mean
+  |L| DPO / SFT 2.06 (core 2.11). Open question on DPO: catalogue coverage 0.82 -> 0.92; closed-set N_eff name
+  5.14 -> 4.70, recommend 4.29 -> 2.97; sampled N_eff at T = 1 4.51 -> 3.69, which SFT reaches near T = 0.83,
+  while SFT at T = 0.5 (roughly every logit x 2) gives 2.25.
+- Budget: the three jobs that ran took 7 min (predicted 7 min).
+- Change: `rtp/datafiles.py`: `build-data`, `cycle run` and `doctor` check the files the manifest lists and
+  rebuild when one is missing (same bytes, so the C0 stages stay valid); the check sits outside the data-hash
+  closure. The Colab-only test failure is fixed.
+- Next cycle: C1 again, unchanged (`ext` on both models, the token probe, the analysis); `core`, `ctx` and both
+  open-set stages are reused.

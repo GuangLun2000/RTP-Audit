@@ -314,6 +314,9 @@ def test_notebook_feedback_prints_the_digest_for_copy_and_paste(tmp_path, monkey
     out = capsys.readouterr().out
     assert digest in out and "line 899 <tag> & more" in out  # whole: never cut, never escaped
     assert "Copy the digest above, from the BEGIN line to the END line" in out and "Complete bundle:" in out
+    import sys
+
+    monkeypatch.setitem(sys.modules, "google.colab", None)  # as outside Colab (the test also runs ON Colab)
     assert notebook.copy_box("text") is False  # the copy button exists on Colab only
     monkeypatch.setattr(notebook, "run", lambda *a, **k: 4)
     assert notebook.feedback("configs/e1.yaml") is None
@@ -381,3 +384,28 @@ def test_ensure_peft_removes_an_incompatible_torchao_and_download_needs_colab(mo
     monkeypatch.setitem(sys.modules, "google", types.ModuleType("google"))
     monkeypatch.setitem(sys.modules, "google.colab", colab)
     assert notebook.download(tmp_path / "f.md") is True and sent == [str(tmp_path / "f.md")]
+
+
+def test_lost_item_files_are_rebuilt_without_making_finished_stages_stale(work_dir, capsys):
+    """Cycle C1 on Colab: a full Drive had kept the data record and the manifest of cycle C0 but dropped
+    dev/ladder_core.jsonl and dev/ladder_ext.jsonl; `build-data` skipped and every ladder job failed."""
+    from rtp import ops, stages
+    from rtp.datafiles import ensure_data, missing_files
+    from rtp.paths import data_dir
+
+    path = "configs/smoke.yaml"
+    cfg = load_config(path)
+    ensure_data(cfg)
+    assert missing_files(cfg) == []
+    before = stages.stage_inputs_digest(cfg, "ladder", "dev", tier="core")
+    lost = [data_dir(cfg.name) / "dev" / "ladder_core.jsonl", data_dir(cfg.name) / "dev" / "ladder_ext.jsonl"]
+    for p in lost:
+        p.unlink()
+    assert missing_files(cfg) == ["dev/ladder_core.jsonl", "dev/ladder_ext.jsonl"]
+    assert ops.run_doctor(cfg, check_hub=False) == 1  # a FAIL that names the files
+    checks = {c["check"]: c for c in json.loads((work_dir / "runs" / cfg.name / "doctor.json").read_text())["checks"]}
+    assert checks["data"]["level"] == "FAIL" and "dev/ladder_core.jsonl" in checks["data"]["detail"]
+    assert cli_main(["build-data", "--config", path]) == 0  # the CLI repairs it
+    assert missing_files(cfg) == [] and all(p.exists() for p in lost)
+    assert stages.stage_inputs_digest(cfg, "ladder", "dev", tier="core") == before  # same bytes: stages stay current
+    capsys.readouterr()

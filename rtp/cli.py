@@ -169,6 +169,7 @@ def main(argv: list[str] | None = None) -> int:
     from rtp import events
     from rtp.config import ConfigError
     from rtp.cycle import BudgetExceeded, CycleError
+    from rtp.datafiles import DataFilesMissing
     from rtp.data.build import DataNotBuiltError
     from rtp.data.splits import SealedSplitError
     from rtp.io import DeadlineReached, StageConfigMismatch
@@ -195,7 +196,7 @@ def main(argv: list[str] | None = None) -> int:
         events.emit("warning", f"DeadlineReached: {exc}", exit_code=6, argv=_argv(argv))
         rc = 6
     except (StageConfigMismatch, DataNotBuiltError, ModelLoadError, WorkDirError, ConfigError, SmokeFailure,
-            PhaseError, VariantError, CycleError) as exc:
+            PhaseError, VariantError, CycleError, DataFilesMissing) as exc:
         log.error("%s: %s", type(exc).__name__, exc)
         events.emit("error", f"{type(exc).__name__}: {exc}", exit_code=4, argv=_argv(argv),
                     traceback=traceback.format_exc())
@@ -326,9 +327,9 @@ def _dispatch(args: argparse.Namespace) -> int:
         if args.stage in ("ladder", "open-set"):
             check_test_split_allowed(cfg, args.split)
     if args.stage == "build-data":
-        from rtp.data.build import build_data
+        from rtp.datafiles import ensure_data
 
-        build_data(cfg, force=args.force)
+        ensure_data(cfg, force=args.force)  # also rebuilds when the record exists but an item file was lost
     elif args.stage == "ladder":
         from rtp.measure.ladder import run_ladder
 

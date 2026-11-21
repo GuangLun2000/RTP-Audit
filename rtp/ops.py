@@ -240,9 +240,16 @@ def run_doctor(cfg: Config | None = None, check_hub: bool = True) -> int:
             _check(res, "config", "FAIL", str(exc))
         ddir = data_dir(cfg.name)
         if io.is_done(ddir):
+            from rtp.datafiles import missing_files
+
             ok = io.stored_stage_hash(ddir) == cfg.data_hash
-            _check(res, "data", "PASS" if ok else "WARN", "built and current" if ok else
-                   "built from other seeds/code: run build-data --force")
+            lost = missing_files(cfg)
+            if lost:  # cycle C1: a full Drive had dropped two item files behind a complete record
+                _check(res, "data", "FAIL", f"{len(lost)} item file(s) listed in the manifest are missing: "
+                       f"{', '.join(lost)}; build-data rebuilds them (same bytes, finished stages stay valid)")
+            else:
+                _check(res, "data", "PASS" if ok else "WARN", "built and current" if ok else
+                       "built from other seeds/code: run build-data --force")
         else:
             _check(res, "data", "WARN", "not built yet (run build-data)")
         if check_hub:
